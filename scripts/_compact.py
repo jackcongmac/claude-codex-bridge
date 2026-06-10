@@ -19,13 +19,10 @@ import os
 import sys
 import time
 import argparse
-import importlib.util
 
-# Reuse the harness's lock / atomic-write / json / log helpers.
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_spec = importlib.util.spec_from_file_location("_auto_turn", os.path.join(_HERE, "_auto_turn.py"))
-at = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(at)
+# Reuse the shared lock / atomic-write / json / log helpers.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bridge_common as at
 
 BOARD_MAX = int(os.environ.get("BRIDGE_BOARD_MAX_BYTES", str(64 * 1024)))
 DEFAULT_KEEP = int(os.environ.get("BRIDGE_KEEP_ENTRIES", "5"))
