@@ -19,6 +19,23 @@ Last updated by: <agent> — <YYYY-MM-DD HH:MM TZ>
 > Roles are a convention, not enforced by code. Adapt to your project. A common
 > split: one agent executes, the other independently reviews; the human approves.
 
+## Resource Strategy
+
+Use agent strengths and subscription constraints intentionally; do not alternate
+turns just for symmetry.
+
+Default `max-claude-pro-codex` split:
+
+- **Claude Max**: high-leverage reasoning, architecture, ambiguity resolution,
+  strict review, test strategy, and final QA.
+- **Codex Pro**: bounded implementation, search, small fixes, test iteration,
+  and mechanical documentation updates.
+- **Human**: final product judgment, budget/risk decisions, and scope changes.
+
+Routing rule of thumb: use Codex first for clear execution; escalate to Claude
+when the next decision needs broad context, adversarial review, or architectural
+judgment; ask the human when the decision changes scope, risk, cost, or taste.
+
 ## Operating Rules
 
 1. Read this board (or at least `collaboration_signal.json`) before acting.
@@ -46,6 +63,7 @@ When one agent needs the other to do something, write it under your Outbox:
 ```text
 ACTION_REQUEST:
 - Priority: Critical / Important / Minor
+- Routing reason: execution / review / architecture / ambiguity / human decision
 - Where: <file / segment / time>
 - Problem:
 - Requested action:

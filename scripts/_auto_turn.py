@@ -474,6 +474,7 @@ def main():
 
     # ---- role (Slice 1): pick template + narrow write permission ----
     roles = state.get("roles", {}) or {}
+    resource_profiles = state.get("resource_profiles", {}) or {}
     my_role = roles.get(self_actor, DEFAULT_ROLE)
     if my_role not in KNOWN_ROLES:
         my_role = DEFAULT_ROLE
@@ -489,6 +490,8 @@ def main():
         "changed_section": changed, "summary_from_peer": signal.get("summary", ""),
         "commit_contract": "harness_commits_your_draft_under_lock",
         "allow_project_writes": role_write_ok,
+        "resource_profiles": resource_profiles,
+        "your_resource_profile": resource_profiles.get(self_actor, {}),
     }
     role_preamble = (("YOUR ROLE THIS TURN: %s\n%s\n\n" % (my_role, role_tmpl)) if role_tmpl
                      else ("YOUR ROLE THIS TURN: %s\n\n" % my_role))

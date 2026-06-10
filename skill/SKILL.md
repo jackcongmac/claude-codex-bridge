@@ -9,6 +9,10 @@ A bidirectional MCP bridge letting Claude Code and Codex call each other as tool
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,
 reads `collaboration.md`, can read/edit files — no shell).
 
+Use the bridge to route work by agent strengths and subscription constraints, not
+by round-robin turns. A common split is Claude Max for high-leverage reasoning /
+review, and Codex Pro for bounded implementation / test iteration.
+
 ## Install / repair the bridge
 
 Run the installer from the repo root (idempotent):
@@ -58,6 +62,27 @@ The loop:
    poke the other agent to take a turn.
 
 The Claude colleague is already told to read `collaboration.md` automatically.
+
+## Resource-aware routing
+
+The default templates include a `max-claude-pro-codex` style resource strategy:
+
+- **Claude Max:** architecture, ambiguity resolution, strict review, test
+  strategy, large-context review, final QA.
+- **Codex Pro:** implementation, search, small fixes, test iteration, mechanical
+  docs updates.
+- **Human:** scope, taste, risk, budget, and permission decisions.
+
+Escalate to Claude when the next step needs broad context or judgment. Hand back
+to Codex when the next step is a bounded implementation or verification task.
+Ask the human when scope, risk, cost, permissions, or taste changes.
+
+Watch the resource/safety state without editing files:
+
+```bash
+scripts/bridge-status.py --project .
+scripts/bridge-status.py --project . --watch
+```
 
 ## Troubleshooting
 

@@ -17,6 +17,9 @@ This project was built with the same Claude + Codex collaboration workflow it
 enables: one agent asks the other for review, execution, and second opinions,
 while both coordinate through project-local shared files.
 
+It is also a place to make asymmetric agent resources useful: route work by
+agent strengths and subscription constraints, not by round-robin turns.
+
 A small, dependency-free bridge over the [Model Context
 Protocol](https://modelcontextprotocol.io). Each agent reaches the other with one
 tool call; the Claude side keeps per-project memory and reads your shared
@@ -28,10 +31,13 @@ tool call; the Claude side keeps per-project memory and reads your shared
 - Ask Codex to run or inspect a task from Claude Code.
 - Keep a persistent Claude colleague per project directory.
 - Coordinate two agents through `collaboration.md` and a low-token signal file.
+- Route Claude Max / Codex Pro style workflows by scarce reasoning vs. bounded execution.
 - Run an event-driven collaboration loop with explicit caps and safety checks.
 
 See [`examples/review-loop.md`](examples/review-loop.md) for a copy-pasteable
 workflow that demonstrates the core review → execute → re-review loop.
+See [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
+`max-claude-pro-codex` routing preset.
 
 ```
    ┌──────────────┐   mcp__codex__codex          ┌──────────────┐
@@ -191,7 +197,8 @@ To start the loop, set `status:"active"` and `next_actor` to whichever agent
 moves first, then bump `collaboration_signal.json`. Watch it live:
 
 ```bash
-tail -f collaboration_auto.log     # queued / started / committed / halted, with cost
+scripts/bridge-status.py --project . --watch  # state, routing, caps, recent events
+tail -f collaboration_auto.log                # raw JSONL events
 ```
 
 How a turn is made safe (all in `_auto_turn.py`, not left to the model):
@@ -216,6 +223,21 @@ on the watcher):
 | `--allow-write` | lets that side edit project files (default: read-only, no Bash) |
 
 Kill switch: Ctrl-C the watcher, or set `status:"paused"`/`"done"`.
+
+### Resource-aware routing
+
+Autonomous mode is not meant to alternate turns blindly. The default templates
+include `resource_profiles` for a `max-claude-pro-codex` style split:
+
+- Claude Max handles high-leverage reasoning, architecture, strict review, test
+  strategy, and final QA.
+- Codex Pro handles bounded implementation, search, small fixes, test iteration,
+  and mechanical docs updates.
+
+`scripts/bridge-status.py --project .` displays the current roles, resource
+profiles, turn caps, cost cap, last signal, recent events, and halt reason. See
+[`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
+routing rules.
 
 ## Configuration (env vars on the Codex `claude_chat` server)
 
