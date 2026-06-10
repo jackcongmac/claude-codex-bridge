@@ -11,10 +11,27 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555.svg)
 ![Python](https://img.shields.io/badge/python-3.x%20stdlib-3776ab.svg)
 
+**Claude Code ↔ Codex, wired together through MCP.**
+
+This project was built with the same Claude + Codex collaboration workflow it
+enables: one agent asks the other for review, execution, and second opinions,
+while both coordinate through project-local shared files.
+
 A small, dependency-free bridge over the [Model Context
 Protocol](https://modelcontextprotocol.io). Each agent reaches the other with one
 tool call; the Claude side keeps per-project memory and reads your shared
 `collaboration.md` so the two agents actually work *together*.
+
+## What you can do with it
+
+- Ask Claude to review Codex's current implementation without leaving Codex.
+- Ask Codex to run or inspect a task from Claude Code.
+- Keep a persistent Claude colleague per project directory.
+- Coordinate two agents through `collaboration.md` and a low-token signal file.
+- Run an event-driven collaboration loop with explicit caps and safety checks.
+
+See [`examples/review-loop.md`](examples/review-loop.md) for a copy-pasteable
+workflow that demonstrates the core review → execute → re-review loop.
 
 ```
    ┌──────────────┐   mcp__codex__codex          ┌──────────────┐
@@ -85,7 +102,7 @@ to let Codex *talk to a reasoning Claude*, this project wraps `claude -p`
 > later via `CLAUDE_CHAT_ALLOWED_TOOLS`. There is no `Bash` access in either mode.
 
 ```bash
-git clone https://github.com/<you>/claude-codex-bridge.git
+git clone https://github.com/jackcongmac/claude-codex-bridge.git
 cd claude-codex-bridge
 ./install.sh                    # read + write colleague (default)
 # BRIDGE_READONLY=1 ./install.sh  # read-only colleague

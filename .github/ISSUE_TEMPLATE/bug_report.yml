@@ -1,0 +1,46 @@
+name: Bug report
+description: Report an install, MCP, session, or collaboration workflow problem.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact command or tool call sequence.
+      placeholder: |
+        1. Run ./install.sh
+        2. Restart Codex
+        3. Call mcp__claude_chat__ask_claude ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "macOS 15.5, Ubuntu 24.04, etc."
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Remove secrets and private project data before posting.
+      render: shell
