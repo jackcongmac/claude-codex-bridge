@@ -1,0 +1,45 @@
+{
+  "name": "max-claude-pro-codex",
+  "description": "Route scarce Claude Max reasoning to planning, review, and final QA while Codex Pro handles bounded implementation and test iteration.",
+  "roles": {
+    "Claude": "reviewer",
+    "Codex": "executor"
+  },
+  "resource_profiles": {
+    "Claude": {
+      "tier": "max",
+      "best_for": [
+        "architecture",
+        "large_context_review",
+        "ambiguity_resolution",
+        "test_strategy",
+        "final_qa"
+      ],
+      "avoid": [
+        "bulk_editing",
+        "repetitive_search",
+        "mechanical_file_updates"
+      ]
+    },
+    "Codex": {
+      "tier": "pro",
+      "best_for": [
+        "implementation",
+        "search",
+        "small_fixes",
+        "test_iteration",
+        "mechanical_docs_updates"
+      ],
+      "avoid": [
+        "large_context_synthesis",
+        "final_architecture_decisions",
+        "unreviewed_security_judgment"
+      ]
+    }
+  },
+  "routing_rules": [
+    "Escalate architecture, ambiguity, test strategy, large-context review, and final QA to Claude.",
+    "Hand bounded implementation, search, small fixes, test iteration, and mechanical docs updates to Codex.",
+    "Ask the human before changing scope, permissions, security posture, cost caps, or product judgment."
+  ]
+}

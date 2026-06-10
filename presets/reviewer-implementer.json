@@ -1,0 +1,13 @@
+{
+  "name": "reviewer-implementer",
+  "description": "Generic two-agent loop: one agent reviews and gates work while the other implements bounded changes.",
+  "roles": {
+    "Claude": "reviewer",
+    "Codex": "executor"
+  },
+  "routing_rules": [
+    "Reviewer owns plan sanity checks, risk review, and GO/NO-GO decisions.",
+    "Implementer owns repository search, file edits, test execution, and applying review findings.",
+    "Either agent can ask the human when the next step changes scope, permissions, or product judgment."
+  ]
+}

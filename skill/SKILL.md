@@ -84,6 +84,17 @@ scripts/bridge-status.py --project .
 scripts/bridge-status.py --project . --watch
 ```
 
+Apply an opinionated role preset when the user wants the state file to encode a
+specific split:
+
+```bash
+scripts/apply-role-preset.py --project . --preset max-claude-pro-codex
+scripts/apply-role-preset.py --project . --preset reviewer-implementer
+```
+
+Presets reuse `roles` and `resource_profiles`; they do not grant extra write
+permissions.
+
 ## Troubleshooting
 
 - **Codex doesn't see `claude_chat`:** it wasn't restarted, or
