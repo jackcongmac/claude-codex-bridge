@@ -1,0 +1,173 @@
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = REPO_ROOT / "scripts" / "bridge-status.py"
+
+
+def write_json(path, payload):
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+class BridgeStatusCliTests(unittest.TestCase):
+    def run_status(self, project):
+        return subprocess.run(
+            [sys.executable, str(SCRIPT), "--project", str(project)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def test_shows_state_signal_and_recent_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            write_json(
+                project / "collaboration_state.json",
+                {
+                    "status": "awaiting_human",
+                    "turn": 7,
+                    "max_turns": 12,
+                    "next_actor": "human",
+                    "roles": {"Claude": "planner", "Codex": "executor"},
+                    "resource_profiles": {
+                        "Claude": {
+                            "tier": "max",
+                            "best_for": ["architecture", "review"],
+                            "avoid": ["bulk_editing"],
+                        },
+                        "Codex": {
+                            "tier": "pro",
+                            "best_for": ["implementation", "tests"],
+                            "avoid": ["large_context_synthesis"],
+                        },
+                    },
+                    "cost_so_far_usd": 1.25,
+                    "max_cost_usd": 5.0,
+                    "last_writer": "Codex",
+                    "failure": "budget review needed",
+                },
+            )
+            write_json(
+                project / "collaboration_signal.json",
+                {
+                    "update_id": 42,
+                    "updated_at": "2026-06-09 10:11:12 PDT",
+                    "updated_by": "Codex",
+                    "summary": "Asked human to approve higher budget.",
+                },
+            )
+            (project / "collaboration_auto.log").write_text(
+                "\n".join(
+                    [
+                        "event 1",
+                        "event 2",
+                        "event 3",
+                        "event 4",
+                        "event 5",
+                        "event 6",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_status(project)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Status: awaiting_human", result.stdout)
+            self.assertIn("Turn: 7/12", result.stdout)
+            self.assertIn("Next actor: human", result.stdout)
+            self.assertIn("Roles: Claude=planner, Codex=executor", result.stdout)
+            self.assertIn("Resource profiles:", result.stdout)
+            self.assertIn(
+                "  Claude: tier=max; best_for=architecture, review; avoid=bulk_editing",
+                result.stdout,
+            )
+            self.assertIn(
+                "  Codex: tier=pro; best_for=implementation, tests; avoid=large_context_synthesis",
+                result.stdout,
+            )
+            self.assertIn("Cost: $1.25 / $5.00", result.stdout)
+            self.assertIn("Last writer: Codex", result.stdout)
+            self.assertIn(
+                "Last signal: #42 by Codex at 2026-06-09 10:11:12 PDT - Asked human to approve higher budget.",
+                result.stdout,
+            )
+            self.assertIn("Recent events:", result.stdout)
+            self.assertNotIn("event 1", result.stdout)
+            self.assertIn("  event 2", result.stdout)
+            self.assertIn("  event 6", result.stdout)
+            self.assertIn("Failure: budget review needed", result.stdout)
+
+    def test_degrades_gracefully_when_signal_and_log_are_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            write_json(
+                project / "collaboration_state.json",
+                {
+                    "status": "paused",
+                    "turn": 0,
+                    "max_turns": 12,
+                    "next_actor": None,
+                    "roles": {"Claude": "peer", "Codex": "peer"},
+                    "cost_so_far_usd": 0,
+                    "max_cost_usd": 5,
+                    "last_writer": None,
+                },
+            )
+
+            result = self.run_status(project)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Status: paused", result.stdout)
+            self.assertIn("Turn: 0/12", result.stdout)
+            self.assertIn("Next actor: none", result.stdout)
+            self.assertIn("Roles: Claude=peer, Codex=peer", result.stdout)
+            self.assertNotIn("Resource profiles:", result.stdout)
+            self.assertIn("Cost: $0.00 / $5.00", result.stdout)
+            self.assertIn("Last writer: none", result.stdout)
+            self.assertIn("Last signal: unavailable", result.stdout)
+            self.assertIn("Recent events: none", result.stdout)
+            self.assertEqual(result.stderr, "")
+
+    def test_does_not_modify_project_files_or_create_new_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            write_json(
+                project / "collaboration_state.json",
+                {"status": "active", "turn": 2, "max_turns": 4},
+            )
+            write_json(
+                project / "collaboration_signal.json",
+                {"update_id": 3, "updated_by": "Claude", "summary": "Continuing."},
+            )
+            (project / "collaboration_auto.log").write_text(
+                "started\ncontinued\n", encoding="utf-8"
+            )
+            before_names = sorted(path.name for path in project.iterdir())
+            before_contents = {
+                path.name: path.read_bytes()
+                for path in project.iterdir()
+                if path.is_file()
+            }
+
+            result = self.run_status(project)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(before_names, sorted(path.name for path in project.iterdir()))
+            after_contents = {
+                path.name: path.read_bytes()
+                for path in project.iterdir()
+                if path.is_file()
+            }
+            self.assertEqual(before_contents, after_contents)
+
+
+if __name__ == "__main__":
+    unittest.main()
