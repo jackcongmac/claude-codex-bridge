@@ -213,7 +213,15 @@ rebuild) — those are a later slice. Nothing here ever changes `update_id`,
 `next_actor`, `turn`, `cost_so_far`, or high-water. The whole change lives inside
 a single `_auto_turn.py` run, before commit.
 
-Config: `max_repair_attempts` (default **2**), from env `BRIDGE_MAX_REPAIR`.
+Config: `max_repair_attempts` (default **2**), from env `BRIDGE_MAX_REPAIR`,
+**clamped to `0..2`** (out-of-range → default 2). Backoff / `retry-after` waits are
+**capped**: a single wait ≤ **60s**, total retry wait per turn ≤ **120s**; a
+`retry-after` larger than the single-wait cap is treated as fatal
+(`rate_limited_too_long`), not slept through.
+
+> **Precedence:** this Slice 2 spec supersedes the earlier generic
+> recoverable/fatal taxonomy in "v2 hardening" wherever they differ. In
+> particular `lock_unavailable` and `agent_timeout` are **fatal** in Slice 2.
 
 Classification at the point of failure:
 - **Recoverable → mechanical retry of the SAME operation** (exponential backoff,

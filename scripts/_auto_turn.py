@@ -261,6 +261,41 @@ def _extract_json(text):
     raise ValueError("no JSON object in model output")
 
 
+# --- Slice 2: bounded, mechanical self-repair (healer, retry-only) ---
+
+def _clamp_max_repair():
+    try:
+        return max(0, min(2, int(os.environ.get("BRIDGE_MAX_REPAIR", "2"))))
+    except Exception:
+        return 2
+
+MAX_REPAIR = _clamp_max_repair()   # clamped 0..2; 0 == today's v4 (every anomaly halts)
+MAX_SINGLE_WAIT = 60               # seconds — cap on a single backoff / retry-after sleep
+MAX_TOTAL_WAIT = 120               # seconds — cap on total retry sleep per turn
+_RATE_MARKERS = ("rate limit", "rate_limit", "429", "too many requests", "overloaded")
+
+
+class TransientError(Exception):
+    """A recoverable model-call failure (launch-level / rate-limited)."""
+    def __init__(self, msg, retry_after=None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
+class MalformedDraft(Exception):
+    """The model returned something that isn't a parseable JSON draft."""
+
+
+def _looks_rate_limited(text):
+    return any(m in text for m in _RATE_MARKERS)
+
+
+def _parse_retry_after(text):
+    import re
+    m = re.search(r"retry[-_ ]?after[\"'=:\s]+(\d+)", text)
+    return int(m.group(1)) if m else None
+
+
 def run_claude(prompt, project, allow_write, sess_path):
     claude = os.environ.get("CLAUDE_BIN") or "claude"
     tools = ["Read", "Grep", "Glob"] + (["Edit", "Write"] if allow_write else [])
@@ -272,10 +307,22 @@ def run_claude(prompt, project, allow_write, sess_path):
     if sid:
         cmd += ["--resume", sid]
     cmd += ["--allowedTools"] + tools
-    p = subprocess.run(cmd, capture_output=True, text=True,
-                       timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
-    data = json.loads(p.stdout)
-    draft = _extract_json(data.get("result", ""))
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+    except FileNotFoundError as e:
+        raise TransientError("claude launch failed: %s" % e)
+    blob = ((p.stdout or "") + (p.stderr or "")).lower()
+    if _looks_rate_limited(blob):
+        raise TransientError("claude rate-limited", _parse_retry_after(blob))
+    try:
+        data = json.loads(p.stdout)
+    except Exception:
+        raise MalformedDraft("claude returned a non-JSON envelope")
+    try:
+        draft = _extract_json(data.get("result", ""))
+    except Exception:
+        raise MalformedDraft("claude result is not a parseable draft JSON")
     cost = data.get("total_cost_usd")
     new_sid = data.get("session_id")
     if new_sid:
@@ -302,13 +349,22 @@ def run_codex(prompt, project, allow_write, sess_path):
     cmd = [codex, "exec", prompt, "--output-last-message", last_f, "-C", project,
            "--skip-git-repo-check", "--ignore-user-config", "-s", sandbox]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                           timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                               timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+        except FileNotFoundError as e:
+            raise TransientError("codex launch failed: %s" % e)
+        blob = ((p.stdout or "") + (p.stderr or "")).lower()
+        if _looks_rate_limited(blob):
+            raise TransientError("codex rate-limited", _parse_retry_after(blob))
         if not os.path.exists(last_f):
             raise RuntimeError("codex exec produced no final message (exit %s): %s"
                                % (p.returncode, (p.stderr or "")[-200:]))
-        with open(last_f) as f:
-            draft = _extract_json(f.read())
+        try:
+            with open(last_f) as f:
+                draft = _extract_json(f.read())
+        except (ValueError, json.JSONDecodeError):
+            raise MalformedDraft("codex final message is not a parseable draft JSON")
     finally:
         try:
             import shutil as _sh; _sh.rmtree(tmpd, ignore_errors=True)
@@ -438,16 +494,51 @@ def main():
     log_event(project, "started", run_id=run_id, actor=self_actor, role=my_role,
               update_id=uid, changed_section=changed)
 
-    # ---- run the model (NO lock held; model produces a draft only) ----
-    try:
-        if a.side == "claude":
-            draft, cost = run_claude(prompt, project, role_write_ok, sess_p)
-        else:
-            draft, cost = run_codex(prompt, project, role_write_ok, sess_p)
-    except subprocess.TimeoutExpired:
-        halt(project, state_p, lock_p, run_id, "agent_timeout")
-    except Exception as e:
-        halt(project, state_p, lock_p, run_id, "agent_error", detail=str(e)[:200])
+    # ---- run the model with bounded mechanical self-repair (Slice 2) ----
+    # NO lock held; the model only produces a draft. Only the model call and a
+    # single malformed-JSON re-prompt are inside this loop — never gates, CAS,
+    # high-water, or commit. With MAX_REPAIR=0 this is exactly v4 (every anomaly
+    # halts, no re-prompt).
+    def _invoke(p):
+        return (run_claude if a.side == "claude" else run_codex)(p, project, role_write_ok, sess_p)
+
+    draft = cost = None
+    attempt = 0          # transient retries used
+    total_wait = 0.0
+    reprompted = False
+    cur_prompt = prompt
+    while True:
+        try:
+            draft, cost = _invoke(cur_prompt)
+            if attempt or reprompted:
+                log_event(project, "repaired", run_id=run_id, attempts=attempt, reprompted=reprompted)
+            break
+        except subprocess.TimeoutExpired:
+            halt(project, state_p, lock_p, run_id, "agent_timeout")     # fatal: never retry a long timeout
+        except MalformedDraft as e:
+            if reprompted or MAX_REPAIR == 0:
+                halt(project, state_p, lock_p, run_id,
+                     "repeated_malformed_drafts" if reprompted else "malformed_draft", detail=str(e)[:160])
+            reprompted = True
+            log_event(project, "repair_attempt", run_id=run_id, kind="malformed_draft")
+            cur_prompt = (prompt + "\n\nIMPORTANT: your previous reply was NOT valid JSON. "
+                          "Return ONLY the single JSON object specified above, with no prose, "
+                          "no code fences, nothing else.")
+        except TransientError as e:
+            ra = e.retry_after
+            if ra is not None and ra > MAX_SINGLE_WAIT:
+                halt(project, state_p, lock_p, run_id, "rate_limited_too_long", retry_after=ra)
+            if attempt >= MAX_REPAIR:
+                halt(project, state_p, lock_p, run_id, "repair_exhausted", detail=str(e)[:160])
+            wait = min(MAX_SINGLE_WAIT, ra if ra else float(2 ** attempt))
+            if total_wait + wait > MAX_TOTAL_WAIT:
+                halt(project, state_p, lock_p, run_id, "repair_exhausted", detail="retry wait budget exceeded")
+            attempt += 1
+            log_event(project, "repair_attempt", run_id=run_id, n=attempt, kind="transient", wait=wait)
+            time.sleep(wait)
+            total_wait += wait
+        except Exception as e:
+            halt(project, state_p, lock_p, run_id, "agent_error", detail=str(e)[:200])
 
     # validate draft
     nxt = draft.get("next_actor")
