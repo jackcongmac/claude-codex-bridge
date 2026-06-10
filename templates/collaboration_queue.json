@@ -1,0 +1,5 @@
+{
+  "control": {"status": "paused", "turns_used": 0, "max_turns": 50, "next_epoch": 1},
+  "tasks": [],
+  "_comment": "Work queue for --queue-mode (multi-agent). Each task: {id, type(execute|review|fix), title, needs_side(claude|codex), needs_role, status(open|claimed|done|failed), depends_on:[ids], claimed_by, claim_epoch, lease_expires_at, created_at, priority(lower=first), attempts, idempotency_key, parent_task, target_task, target_output_agent, preferred_agent, result_summary}. Agents CLAIM an eligible open task (deps done) under the global lock, run the model with no lock held, then commit (done + own outbox + enqueue follow-ups) under the lock with claim_epoch fencing. A lease that expires without renewal is reclaimable (epoch bumped, fencing the old claimer). This file is high-churn and lives separately from collaboration_state.json (the low-churn 2-actor control plane). Seed tasks here and run watch-collaboration.sh --queue-mode --agent-id <id>."
+}
