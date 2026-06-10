@@ -25,7 +25,7 @@ TTL="${BRIDGE_PUSH_TTL:-180}"          # seconds before a held lock is considere
 WAIT_MAX="${BRIDGE_PUSH_WAIT:-120}"    # seconds to wait for a peer's push before giving up
 
 now() { date +%s; }
-jget() { python3 -c "import json;print(json.load(open('$LOCK'))['$1'])" 2>/dev/null || echo "$2"; }
+jget() { _L="$LOCK" _K="$1" python3 -c "import json,os;print(json.load(open(os.environ['_L']))[os.environ['_K']])" 2>/dev/null || echo "$2"; }
 
 release() { rm -f "$LOCK"; }
 

@@ -27,6 +27,7 @@ copy_if_absent() {
 copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$TARGET/collaboration.md"
 copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$TARGET/collaboration_signal.json"
 copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$TARGET/collaboration_state.json"
+copy_if_absent "$REPO_DIR/templates/collaboration_queue.json"  "$TARGET/collaboration_queue.json"
 
 cat <<EOF
 
@@ -50,6 +51,15 @@ Autonomous mode (event-driven, no manual poke):
   - Watch it: tail -f "$TARGET/collaboration_auto.log"
   - SAFETY: read-only by default; pass --allow-write to let an agent edit project
     files. max_turns / max_cost in the state file cap the loop.
+
+Multi-agent mode (--queue-mode: N agents per AI via a work queue):
+  - Seed tasks in collaboration_queue.json (set control.status="active").
+  - Start one watcher per agent with a distinct --agent-id:
+        scripts/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-1 --role executor --project "$TARGET"
+        scripts/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-2 --role executor --project "$TARGET"
+        scripts/watch-collaboration.sh --queue-mode --as claude --agent-id claude-rev   --role reviewer --project "$TARGET"
+  - Agents claim eligible tasks in parallel (claim-under-lock + epoch fencing).
+    Budget is control.max_turns in collaboration_queue.json.
 
 Fill in the <placeholders> (roles, project state) to match your project.
 EOF
