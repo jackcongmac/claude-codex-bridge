@@ -67,7 +67,23 @@ def validate_preset(preset):
         validate_resource_profiles(preset["resource_profiles"])
 
 
-def apply_preset(project, preset_name):
+def validate_apply_is_safe(project, state, force):
+    if force:
+        return
+    if state.get("status") == "active":
+        raise SystemExit(
+            "refusing to apply preset while collaboration_state.json has "
+            "status=active; pause the loop first or pass --force"
+        )
+    lock_path = project / "collaboration.lock"
+    if lock_path.exists():
+        raise SystemExit(
+            f"refusing to apply preset while {lock_path} exists; "
+            "wait for the turn to finish, remove a stale lock manually, or pass --force"
+        )
+
+
+def apply_preset(project, preset_name, force=False):
     state_path = project / "collaboration_state.json"
     if not state_path.is_file():
         raise SystemExit(f"missing collaboration_state.json in {project}")
@@ -75,6 +91,7 @@ def apply_preset(project, preset_name):
     preset = load_json(preset_path(preset_name))
     validate_preset(preset)
     state = load_json(state_path)
+    validate_apply_is_safe(project, state, force)
 
     state["roles"] = preset["roles"]
     if "resource_profiles" in preset:
@@ -90,9 +107,14 @@ def main():
     )
     parser.add_argument("--project", default=".", help="Project directory containing collaboration_state.json.")
     parser.add_argument("--preset", required=True, help="Preset name from presets/*.json.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Apply even when the collaboration loop is active or a collaboration.lock file exists.",
+    )
     args = parser.parse_args()
 
-    name, state_path = apply_preset(Path(args.project).resolve(), args.preset)
+    name, state_path = apply_preset(Path(args.project).resolve(), args.preset, args.force)
     print(f"[ok] applied role preset {name} to {state_path}")
 
 

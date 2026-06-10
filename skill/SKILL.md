@@ -93,7 +93,9 @@ scripts/apply-role-preset.py --project . --preset reviewer-implementer
 ```
 
 Presets reuse `roles` and `resource_profiles`; they do not grant extra write
-permissions.
+permissions. Apply them while the loop is paused; the command refuses
+`status:"active"` or an existing `collaboration.lock` unless `--force` is
+passed.
 
 ## Troubleshooting
 

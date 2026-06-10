@@ -80,7 +80,7 @@ class RolePresetTests(unittest.TestCase):
             project = pathlib.Path(tmp)
             state_path = project / "collaboration_state.json"
             state = json.loads(STATE_TEMPLATE.read_text())
-            state["status"] = "active"
+            state["status"] = "paused"
             state["turn"] = 7
             state["last_writer"] = "Claude"
             state_path.write_text(json.dumps(state, indent=2) + "\n")
@@ -99,7 +99,7 @@ class RolePresetTests(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             self.assertEqual(second.returncode, 0, second.stderr)
             applied = json.loads(state_path.read_text())
-            self.assertEqual(applied["status"], "active")
+            self.assertEqual(applied["status"], "paused")
             self.assertEqual(applied["turn"], 7)
             self.assertEqual(applied["last_writer"], "Claude")
             self.assertEqual(applied["resource_profiles"], state["resource_profiles"])
@@ -108,6 +108,97 @@ class RolePresetTests(unittest.TestCase):
                 {"Claude": "reviewer", "Codex": "executor"},
             )
             self.assertNotIn("resource_profiles", self.load_preset("reviewer-implementer"))
+
+    def test_apply_refuses_active_loop_without_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = pathlib.Path(tmp)
+            state_path = project / "collaboration_state.json"
+            state = json.loads(STATE_TEMPLATE.read_text())
+            state["status"] = "active"
+            state["roles"] = {"Claude": "peer", "Codex": "peer"}
+            state_path.write_text(json.dumps(state, indent=2) + "\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPLY),
+                    "--project",
+                    str(project),
+                    "--preset",
+                    "reviewer-implementer",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("status=active", result.stderr)
+            self.assertEqual(
+                json.loads(state_path.read_text())["roles"],
+                {"Claude": "peer", "Codex": "peer"},
+            )
+
+    def test_apply_force_allows_active_loop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = pathlib.Path(tmp)
+            state_path = project / "collaboration_state.json"
+            state = json.loads(STATE_TEMPLATE.read_text())
+            state["status"] = "active"
+            state["roles"] = {"Claude": "peer", "Codex": "peer"}
+            state_path.write_text(json.dumps(state, indent=2) + "\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPLY),
+                    "--project",
+                    str(project),
+                    "--preset",
+                    "reviewer-implementer",
+                    "--force",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(state_path.read_text())["roles"],
+                {"Claude": "reviewer", "Codex": "executor"},
+            )
+
+    def test_apply_refuses_existing_lock_without_force(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = pathlib.Path(tmp)
+            state_path = project / "collaboration_state.json"
+            state = json.loads(STATE_TEMPLATE.read_text())
+            state["status"] = "paused"
+            state["roles"] = {"Claude": "peer", "Codex": "peer"}
+            state_path.write_text(json.dumps(state, indent=2) + "\n")
+            (project / "collaboration.lock").write_text("{}\n")
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(APPLY),
+                    "--project",
+                    str(project),
+                    "--preset",
+                    "reviewer-implementer",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("collaboration.lock", result.stderr)
+            self.assertEqual(
+                json.loads(state_path.read_text())["roles"],
+                {"Claude": "peer", "Codex": "peer"},
+            )
 
 
 if __name__ == "__main__":
