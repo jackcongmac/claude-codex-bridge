@@ -1,6 +1,8 @@
 {
   "status": "paused",
   "next_actor": null,
+  "roles": {"Claude": "peer", "Codex": "peer"},
+  "pending_role_change": null,
   "turn": 0,
   "max_turns": 12,
   "cost_so_far_usd": 0.0,
@@ -9,5 +11,5 @@
   "last_writer": null,
   "last_update_id": 0,
   "failure": null,
-  "_comment": "Authoritative control state for the autonomous loop. status: active|paused|awaiting_human|done. next_actor: Claude|Codex|human|null (who is AUTHORIZED to act next). Set status=active and next_actor=<agent> to start the loop. Watchers refuse to run if this file is absent."
+  "_comment": "Authoritative control state for the autonomous loop. status: active|paused|awaiting_human|done. next_actor: Claude|Codex|human|null (who is AUTHORIZED to act next). roles: per-agent role (peer|planner|executor|reviewer; healer/improver/coverer reserved, not yet active). A role only NARROWS the watcher's --allow-write ceiling. pending_role_change holds an upgrade/peer/special-role request awaiting reviewer or human approval. Set status=active and next_actor=<agent> to start the loop."
 }

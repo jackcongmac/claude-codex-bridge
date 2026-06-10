@@ -33,6 +33,16 @@ OTHER = {"Claude": "Codex", "Codex": "Claude"}
 VALID_STATUS = {"active", "paused", "awaiting_human", "done"}
 VALID_ACTOR = {"Claude", "Codex", "human", None}
 
+# --- roles (Slice 1: roles foundation) ---
+KNOWN_ROLES = {"peer", "planner", "executor", "reviewer", "healer", "improver", "coverer"}
+# privilege ordering for monotonic role_change gating (higher = more power)
+ROLE_PRIV = {"reviewer": 0, "planner": 0, "peer": 1, "executor": 2,
+             "healer": 3, "improver": 3, "coverer": 3}
+SPECIAL_ROLES = {"healer", "improver", "coverer"}   # behavior NOT implemented in Slice 1
+WRITE_ROLES = {"peer", "executor"}                  # roles that MAY use write tools (if the watcher allows)
+REVIEWER_VERDICTS = {"GO", "NO-GO", "REVISE", None}
+DEFAULT_ROLE = "peer"
+
 
 def now_str():
     return time.strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -177,6 +187,45 @@ def read_section(board_path, header_name):
     return text[idx: (len(text) if nxt == -1 else nxt)].strip()
 
 
+# ---------- roles (Slice 1) ----------
+
+def load_role_template(project, role):
+    """Role prompt template: project override first, then the shipped templates,
+    else empty (base instruction only). Templates carry NO permission authority."""
+    candidates = [
+        os.path.join(project, "role_templates", role + ".md"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "role_templates", role + ".md"),
+    ]
+    for c in candidates:
+        try:
+            with open(c) as f:
+                return f.read().strip()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+    return ""
+
+
+def classify_role_change(self_actor, request, roles):
+    """Deterministic policy. Returns (decision, info):
+      ('apply', role)   self-downgrade to a non-special role with priv <= current
+      ('pending', why)  upgrade / peer change / entering a special role -> needs
+                        reviewer-or-human approval (NOT auto-applied)
+      ('reject', why)   malformed
+    A role change can never grant tools the watcher wasn't started with — that
+    ceiling is enforced separately when computing effective write permission."""
+    if not isinstance(request, dict):
+        return ("reject", "malformed")
+    actor = request.get("actor")
+    role = request.get("role")
+    if actor not in ("Claude", "Codex") or role not in KNOWN_ROLES:
+        return ("reject", "unknown_actor_or_role")
+    cur_priv = ROLE_PRIV.get((roles or {}).get(actor, DEFAULT_ROLE), ROLE_PRIV[DEFAULT_ROLE])
+    new_priv = ROLE_PRIV.get(role, ROLE_PRIV[DEFAULT_ROLE])
+    if actor == self_actor and role not in SPECIAL_ROLES and new_priv <= cur_priv:
+        return ("apply", role)
+    return ("pending", "needs_approval")
+
+
 # ---------- model invocation ----------
 
 DRAFT_INSTRUCTION = (
@@ -191,7 +240,11 @@ DRAFT_INSTRUCTION = (
     "Rules: set next_actor to the OTHER agent if you need them to act next; to "
     "\"human\" or status \"awaiting_human\" if a human decision is needed; status "
     "\"done\" if the work is complete. Do NOT edit the board, signal, or state "
-    "files yourself — the harness commits your reply. Keep it concise."
+    "files yourself — the harness commits your reply. Keep it concise.\n\n"
+    "Optional fields you MAY add: if your role is 'reviewer', include "
+    '\"verdict\": \"GO|NO-GO|REVISE\". To request a role change, include '
+    '\"role_change\": {\"actor\": \"Claude|Codex\", \"role\": \"peer|planner|executor|reviewer\"} '
+    "— note only a self-downgrade applies immediately; anything else is queued for approval."
 )
 
 
@@ -356,27 +409,41 @@ def main():
     atomic_write_json(hw_p, {"last_processed_update_id": uid})
     seen = uid
 
+    # ---- role (Slice 1): pick template + narrow write permission ----
+    roles = state.get("roles", {}) or {}
+    my_role = roles.get(self_actor, DEFAULT_ROLE)
+    if my_role not in KNOWN_ROLES:
+        my_role = DEFAULT_ROLE
+    # Permission ceiling = watcher --allow-write; a role can only NARROW it,
+    # never widen it. Enforced here in the harness, not by the prompt.
+    role_write_ok = bool(a.allow_write) and (my_role in WRITE_ROLES)
+    role_tmpl = load_role_template(project, my_role)
+
     changed = signal.get("changed_section", "")
     section_text = read_section(board_p, changed) if changed else ""
     envelope = {
-        "run_id": run_id, "update_id": uid, "you_are": self_actor,
+        "run_id": run_id, "update_id": uid, "you_are": self_actor, "your_role": my_role,
         "changed_section": changed, "summary_from_peer": signal.get("summary", ""),
         "commit_contract": "harness_commits_your_draft_under_lock",
-        "allow_project_writes": bool(a.allow_write),
+        "allow_project_writes": role_write_ok,
     }
-    prompt = (DRAFT_INSTRUCTION + "\n\nTURN ENVELOPE:\n" + json.dumps(envelope, ensure_ascii=False)
+    role_preamble = (("YOUR ROLE THIS TURN: %s\n%s\n\n" % (my_role, role_tmpl)) if role_tmpl
+                     else ("YOUR ROLE THIS TURN: %s\n\n" % my_role))
+    prompt = (role_preamble + DRAFT_INSTRUCTION + "\n\nTURN ENVELOPE:\n"
+              + json.dumps(envelope, ensure_ascii=False)
               + "\n\nThe section that just changed (" + (changed or "n/a") + "):\n"
               + (section_text or "(empty)")
               + "\n\nAlso read collaboration.md / the project as needed for context.")
 
-    log_event(project, "started", run_id=run_id, actor=self_actor, update_id=uid, changed_section=changed)
+    log_event(project, "started", run_id=run_id, actor=self_actor, role=my_role,
+              update_id=uid, changed_section=changed)
 
     # ---- run the model (NO lock held; model produces a draft only) ----
     try:
         if a.side == "claude":
-            draft, cost = run_claude(prompt, project, a.allow_write, sess_p)
+            draft, cost = run_claude(prompt, project, role_write_ok, sess_p)
         else:
-            draft, cost = run_codex(prompt, project, a.allow_write, sess_p)
+            draft, cost = run_codex(prompt, project, role_write_ok, sess_p)
     except subprocess.TimeoutExpired:
         halt(project, state_p, lock_p, run_id, "agent_timeout")
     except Exception as e:
@@ -391,6 +458,13 @@ def main():
              next_actor=str(nxt), status=str(st_new))
     if mc is not None and cost is None and a.side == "claude":
         halt(project, state_p, lock_p, run_id, "cost_unparseable")
+    # role-specific output contract (Slice 1): reviewer may carry a verdict
+    verdict = draft.get("verdict")
+    if my_role == "reviewer" and verdict not in REVIEWER_VERDICTS:
+        halt(project, state_p, lock_p, run_id, "invalid_draft", role="reviewer", verdict=str(verdict))
+    # classify any role_change request now; it is APPLIED under the lock below
+    role_req = draft.get("role_change")
+    role_decision = classify_role_change(self_actor, role_req, roles) if role_req else None
 
     # ---- acquire lock and commit (CAS) ----
     # High-water was already advanced; if we can't commit we must NOT silently
@@ -419,6 +493,24 @@ def main():
             "run_id": run_id,
             "failure": None,
         })
+        # role_change (Slice 1): only a self-downgrade is auto-applied; an upgrade
+        # / peer change / special-role entry is recorded as pending (needs a
+        # reviewer or human to approve) and is NOT executed here.
+        if role_decision:
+            kind, info = role_decision
+            if kind == "apply":
+                cur_state.setdefault("roles", dict(roles or {}))[self_actor] = info
+                log_event(project, "role_applied", run_id=run_id, actor=self_actor, new_role=info)
+            elif kind == "pending":
+                cur_state["pending_role_change"] = {
+                    "requested_by": self_actor, "actor": role_req.get("actor"),
+                    "role": role_req.get("role"), "reason": info, "at": now_str()}
+                log_event(project, "role_change_pending", run_id=run_id,
+                          requested_by=self_actor, actor=role_req.get("actor"),
+                          role=role_req.get("role"), reason=info)
+            else:  # reject
+                log_event(project, "role_change_rejected", run_id=run_id,
+                          requested_by=self_actor, target=role_req, reason=info)
         atomic_write_json(state_p, cur_state)
         atomic_write_json(signal_p, {  # signal written LAST = commit marker
             "update_id": new_uid, "updated_at": now_str(), "updated_by": self_actor,
