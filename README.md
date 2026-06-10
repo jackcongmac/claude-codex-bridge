@@ -23,6 +23,8 @@ while both coordinate through project-local shared files.
 It is also a place to make asymmetric agent resources useful: route work by
 agent strengths and subscription constraints, not by round-robin turns.
 
+![Terminal demo: Codex asks Claude for review, applies the change, then asks Claude to re-review with memory of the previous turn.](docs/assets/claude-codex-bridge-demo.gif)
+
 A small, dependency-free bridge over the [Model Context
 Protocol](https://modelcontextprotocol.io). Each agent reaches the other with one
 tool call; the Claude side keeps per-project memory and reads your shared
