@@ -250,7 +250,9 @@ scripts/apply-role-preset.py --project . --preset reviewer-implementer
 ```
 
 Presets reuse the existing `roles` and `resource_profiles` fields; they do not
-grant extra write permissions. See [`docs/role-presets.md`](docs/role-presets.md).
+grant extra write permissions. Apply them while the loop is paused; the command
+refuses `status:"active"` or an existing `collaboration.lock` unless `--force`
+is passed. See [`docs/role-presets.md`](docs/role-presets.md).
 
 ## Configuration (env vars on the Codex `claude_chat` server)
 

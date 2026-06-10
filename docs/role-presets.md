@@ -20,6 +20,10 @@ The command updates `collaboration_state.json` in place. It preserves unrelated
 state such as `status`, `turn`, `max_turns`, `max_cost_usd`, and `last_writer`.
 Running the same preset more than once is idempotent.
 
+Apply presets while the loop is paused. By default the command refuses to write
+when `status` is `active` or `collaboration.lock` exists. Use `--force` only
+when you intentionally want to override that guard.
+
 ## Preset: max-claude-pro-codex
 
 Use this when Claude has the deeper or more expensive reasoning budget and Codex
