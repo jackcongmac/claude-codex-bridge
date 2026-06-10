@@ -153,9 +153,8 @@ def release_lock(lock_path):
 
 # ---------- board section append ----------
 
-def append_to_outbox(board_path, actor, markdown):
-    """Append markdown under the '## <actor> Outbox' header (create if missing)."""
-    header = "## %s Outbox" % actor
+def _append_under_header(board_path, header, markdown):
+    """Append markdown under a '## <header>' section (create the section if absent)."""
     entry = "\n### %s\n\n%s\n" % (now_str(), markdown.strip())
     try:
         with open(board_path) as f:
@@ -166,11 +165,15 @@ def append_to_outbox(board_path, actor, markdown):
     if idx == -1:
         text = text.rstrip() + "\n\n" + header + "\n" + entry
     else:
-        # insert right after the header line
         nl = text.find("\n", idx)
         nl = len(text) if nl == -1 else nl + 1
         text = text[:nl] + entry + text[nl:]
     atomic_write(board_path, text)
+
+
+def append_to_outbox(board_path, actor, markdown):
+    """Append under '## <actor> Outbox'."""
+    _append_under_header(board_path, "## %s Outbox" % actor, markdown)
 
 
 def read_section(board_path, header_name):
@@ -244,7 +247,11 @@ DRAFT_INSTRUCTION = (
     "Optional fields you MAY add: if your role is 'reviewer', include "
     '\"verdict\": \"GO|NO-GO|REVISE\". To request a role change, include '
     '\"role_change\": {\"actor\": \"Claude|Codex\", \"role\": \"peer|planner|executor|reviewer\"} '
-    "— note only a self-downgrade applies immediately; anything else is queued for approval."
+    "— note only a self-downgrade applies immediately; anything else is queued for approval. "
+    "If YOU are about to be limited (out of session / context / rate), include "
+    '\"handoff\": {\"reason\": \"context_full|session_expiring|rate_limited\"} to hand your '
+    "work to the other agent. If you are COVERING and believe the original agent can resume, "
+    'you may include \"handback\": true (a human confirms before the loop returns to them).'
 )
 
 
@@ -472,15 +479,26 @@ def main():
     atomic_write_json(hw_p, {"last_processed_update_id": uid})
     seen = uid
 
-    # ---- role (Slice 1): pick template + narrow write permission ----
+    # ---- coverage (Slice 3) + role (Slice 1): pick template + narrow write ----
     roles = state.get("roles", {}) or {}
     resource_profiles = state.get("resource_profiles", {}) or {}
-    my_role = roles.get(self_actor, DEFAULT_ROLE)
-    if my_role not in KNOWN_ROLES:
-        my_role = DEFAULT_ROLE
-    # Permission ceiling = watcher --allow-write; a role can only NARROW it,
-    # never widen it. Enforced here in the harness, not by the prompt.
-    role_write_ok = bool(a.allow_write) and (my_role in WRITE_ROLES)
+    coverage_owner = state.get("coverage_owner")
+    covered_actor = state.get("covered_actor")
+    start_epoch = state.get("handoff_epoch", 0)
+    is_covering = (coverage_owner == self_actor and covered_actor in ("Claude", "Codex"))
+    if is_covering:
+        # Covering for the peer: use the coverer role; write permission comes from
+        # the COVERED actor's original role (a read-only covered role stays
+        # read-only). The coverer role itself grants no extra write.
+        my_role = "coverer"
+        role_write_ok = bool(a.allow_write) and (roles.get(covered_actor, DEFAULT_ROLE) in WRITE_ROLES)
+    else:
+        my_role = roles.get(self_actor, DEFAULT_ROLE)
+        if my_role not in KNOWN_ROLES:
+            my_role = DEFAULT_ROLE
+        # Permission ceiling = watcher --allow-write; a role can only NARROW it,
+        # never widen it. Enforced here in the harness, not by the prompt.
+        role_write_ok = bool(a.allow_write) and (my_role in WRITE_ROLES)
     role_tmpl = load_role_template(project, my_role)
 
     changed = signal.get("changed_section", "")
@@ -490,6 +508,7 @@ def main():
         "changed_section": changed, "summary_from_peer": signal.get("summary", ""),
         "commit_contract": "harness_commits_your_draft_under_lock",
         "allow_project_writes": role_write_ok,
+        "covering_for": covered_actor if is_covering else None,
         "resource_profiles": resource_profiles,
         "your_resource_profile": resource_profiles.get(self_actor, {}),
     }
@@ -566,6 +585,10 @@ def main():
     # classify any role_change request now; it is APPLIED under the lock below
     role_req = draft.get("role_change")
     role_decision = classify_role_change(self_actor, role_req, roles) if role_req else None
+    # Slice 3 coverage intents (resolved under the lock below)
+    handoff_req = draft.get("handoff") if isinstance(draft.get("handoff"), dict) else None
+    handback_req = bool(draft.get("handback")) and is_covering
+    opening_handoff = bool(handoff_req) and not is_covering   # you hand off your OWN turn
 
     # ---- acquire lock and commit (CAS) ----
     # High-water was already advanced; if we can't commit we must NOT silently
@@ -581,56 +604,81 @@ def main():
     if cur_state.get("status") != "active" or cur_state.get("next_actor") != self_actor:
         release_lock(lock_p)
         log_event(project, "authority_changed", run_id=run_id); sys.exit(10)
+    # Slice 3 coverage epoch guard: a covering turn must commit against the same
+    # coverage it opened under (belt & suspenders atop the update_id CAS).
+    if is_covering and (cur_state.get("handoff_epoch", 0) != start_epoch
+                        or cur_state.get("coverage_owner") != self_actor):
+        halt(project, state_p, lock_p, run_id, "coverage_changed", lock_held=True,
+             seen_epoch=start_epoch, now_epoch=cur_state.get("handoff_epoch"))
     try:
         new_uid = seen + 1
-        append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
-        cur_state.update({
-            "turn": cur_state.get("turn", 0) + 1,
-            "next_actor": nxt if nxt is not None else OTHER[self_actor],
-            "status": st_new,
-            "last_writer": self_actor,
-            "last_update_id": new_uid,
+        common = {
+            "turn": cur_state.get("turn", 0) + 1, "last_writer": self_actor,
+            "last_update_id": new_uid, "run_id": run_id,
             "cost_so_far_usd": round(cur_state.get("cost_so_far_usd", 0) + (cost or 0), 6),
-            "run_id": run_id,
-            "failure": None,
-        })
-        # role_change (Slice 1): only a self-downgrade is auto-applied; an upgrade
-        # / peer change / special-role entry is recorded as pending (needs a
-        # reviewer or human to approve) and is NOT executed here.
-        if role_decision:
-            kind, info = role_decision
-            if kind == "apply":
-                cur_state.setdefault("roles", dict(roles or {}))[self_actor] = info
-                log_event(project, "role_applied", run_id=run_id, actor=self_actor, new_role=info)
-            elif kind == "pending":
-                cur_state["pending_role_change"] = {
-                    "requested_by": self_actor, "actor": role_req.get("actor"),
-                    "role": role_req.get("role"), "reason": info, "at": now_str()}
-                log_event(project, "role_change_pending", run_id=run_id,
-                          requested_by=self_actor, actor=role_req.get("actor"),
-                          role=role_req.get("role"), reason=info)
-            else:  # reject
-                log_event(project, "role_change_rejected", run_id=run_id,
-                          requested_by=self_actor, target=role_req, reason=info)
+        }
+        if is_covering:
+            # COVERER turn (single-turn MVP): write the Coverage Log (NEVER the
+            # covered actor's outbox), bump the counter, pause for a human.
+            _append_under_header(board_p, "## Coverage Log", "(%s covering %s) %s"
+                                 % (self_actor, covered_actor, draft.get("reply_markdown", "")))
+            reason = "handback_suggested" if handback_req else "cover_turn_done"
+            cur_state.update(common)
+            cur_state.update({"next_actor": "human", "status": "awaiting_human",
+                              "cover_turns_used": cur_state.get("cover_turns_used", 0) + 1,
+                              "failure": {"reason": reason, "at": now_str()}})
+            sig_section = "Coverage Log"
+            log_event(project, "covering", run_id=run_id, actor=self_actor, covered=covered_actor,
+                      used=cur_state["cover_turns_used"], reason=reason)
+        elif opening_handoff:
+            # OPEN coverage: hand my OWN turn to the peer (self-authorizing).
+            append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
+            peer = OTHER[self_actor]
+            cur_state.update(common)
+            cur_state.update({"next_actor": peer, "status": "active",
+                              "coverage_owner": peer, "covered_actor": self_actor,
+                              "handoff_epoch": cur_state.get("handoff_epoch", 0) + 1,
+                              "handoff_reason": handoff_req.get("reason"),
+                              "cover_turns_used": 0, "failure": None})
+            sig_section = "%s Outbox" % self_actor
+            log_event(project, "handoff", run_id=run_id, actor=self_actor, to=peer,
+                      reason=handoff_req.get("reason"))
+        else:
+            # NORMAL turn.
+            append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
+            cur_state.update(common)
+            cur_state.update({"next_actor": nxt if nxt is not None else OTHER[self_actor],
+                              "status": st_new, "failure": None})
+            sig_section = "%s Outbox" % self_actor
+            if role_decision:  # Slice 1: self-downgrade applies; else pending/reject
+                kind, info = role_decision
+                if kind == "apply":
+                    cur_state.setdefault("roles", dict(roles or {}))[self_actor] = info
+                    log_event(project, "role_applied", run_id=run_id, actor=self_actor, new_role=info)
+                elif kind == "pending":
+                    cur_state["pending_role_change"] = {
+                        "requested_by": self_actor, "actor": role_req.get("actor"),
+                        "role": role_req.get("role"), "reason": info, "at": now_str()}
+                    log_event(project, "role_change_pending", run_id=run_id, requested_by=self_actor,
+                              actor=role_req.get("actor"), role=role_req.get("role"), reason=info)
+                else:
+                    log_event(project, "role_change_rejected", run_id=run_id,
+                              requested_by=self_actor, target=role_req, reason=info)
         atomic_write_json(state_p, cur_state)
         atomic_write_json(signal_p, {  # signal written LAST = commit marker
             "update_id": new_uid, "updated_at": now_str(), "updated_by": self_actor,
-            "changed_section": "%s Outbox" % self_actor,
-            "summary": draft.get("summary", "")[:200],
-        })
+            "changed_section": sig_section, "summary": draft.get("summary", "")[:200]})
         atomic_write_json(hw_p, {"last_processed_update_id": new_uid})  # our own write
     except Exception as e:
-        # board may have been appended but state/signal failed -> halt visibly
         halt(project, state_p, lock_p, run_id, "commit_error", lock_held=True, detail=str(e)[:200])
     finally:
         release_lock(lock_p)
 
-    log_event(project, "committed", run_id=run_id, actor=self_actor,
-              update_id=new_uid, next_actor=cur_state["next_actor"],
-              status=st_new, turn=cur_state["turn"],
-              cost=cost, cost_so_far=cur_state["cost_so_far_usd"])
-    if st_new != "active":
-        notify("Auto-loop %s after %s's turn (turn %d)" % (st_new, self_actor, cur_state["turn"]))
+    log_event(project, "committed", run_id=run_id, actor=self_actor, update_id=new_uid,
+              next_actor=cur_state["next_actor"], status=cur_state["status"],
+              turn=cur_state["turn"], cost=cost, cost_so_far=cur_state["cost_so_far_usd"])
+    if cur_state["status"] != "active":
+        notify("Auto-loop %s after %s's turn (turn %d)" % (cur_state["status"], self_actor, cur_state["turn"]))
     sys.exit(0)
 
 

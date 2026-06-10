@@ -241,6 +241,68 @@ Classification at the point of failure:
 Logging: `repair_attempt` (n, class), `repaired` (succeeded after n), and the
 existing `halted` with reason `repair_exhausted` / `repeated_malformed_drafts`.
 
+## Slice 3 spec — coverer: graceful handoff, SOFT trigger (for Codex review)
+
+Keep the loop live when one side is about to be limited: instead of halting, the
+peer **covers** the work. Slice 3 MVP = the coverage state machine + a
+**self-reported (soft) handoff** + the **coverer role**, bounded and human-gated.
+
+**Deferred to Slice 3b (explicitly OUT of this slice):** autonomous *hard-block*
+detection (the peer noticing A's silence/failures and self-initiating coverage). A
+hard-blocked A never bumps the signal, so the peer's watcher never wakes — that
+needs a watcher **heartbeat** (poll on a timer, not only on signal change), which
+is its own slice. Slice 3 covers soft self-report + manual/human-triggered
+coverage only.
+
+New state fields: `coverage_owner` (null|Claude|Codex), `covered_actor`,
+`handoff_epoch` (int, ++ on open and on handback), `handoff_reason`,
+`max_cover_turns` (default **2**), `cover_turns_used`.
+
+Soft trigger — a draft may include `handoff: {reason: "context_full|session_expiring|..."}`.
+A self-reported handoff is **self-authorizing** (you are degrading yourself — a
+downgrade-like act, no peer/human approval needed). At commit under the lock:
+`coverage_owner = OTHER(self)`, `covered_actor = self`, `handoff_epoch += 1`,
+`cover_turns_used = 0`, `next_actor = OTHER(self)`; a handoff note is written in
+**self's own outbox** ("handing off: <reason>"). `status` stays `active`.
+
+Coverer turn — when `coverage_owner == self`: the harness runs the `coverer` role
+template ("you are covering for <covered_actor>; continue the work from the board;
+keep it moving"). The coverer writes to a **`## Coverage Log`** section — it NEVER
+writes `covered_actor`'s outbox (no impersonation). Each coverer commit does `cover_turns_used += 1`. Coverer write permission =
+`--allow-write` (watcher ceiling) **AND** `covered_actor`'s original role is
+write-capable (peer/executor). The coverer role itself grants NO extra write — a
+read-only covered role stays read-only while covered.
+
+**MVP = SINGLE cover turn (max_cover_turns = 1).** Why: v4 routing only fires an
+agent when the OTHER agent writes the signal, and a committing agent advances its
+own high-water — so after B's one cover commit, B's own signal won't re-trigger B,
+and the covered/unavailable A won't advance either. Multi-turn coverage therefore
+needs the self-schedule/heartbeat machinery, which is **Slice 3b**. So in Slice 3:
+after the single cover turn, the harness sets `status = awaiting_human` (reason
+`cover_turn_done`) — coverage stays recorded; a human resumes. `max_cover_turns>1`
+and `--allow-cover-continue` are reserved for Slice 3b and are inert here.
+
+Handback (normal v4 commits; in Slice 3 the loop always pauses at a human first):
+- **Human-confirmed** (the only path that resumes the loop automatically): a human
+  who knows A is back sets `coverage_owner=null`, `covered_actor=null`,
+  `next_actor=covered_actor`, `handoff_epoch += 1`, and bumps the signal.
+- **Coverer-suggested**: the coverer's draft may set `handback: true`, but since A's
+  availability is unproven, this resolves to `status=awaiting_human` (logged
+  `handback_suggested`) — it does NOT silently hand the loop to a possibly-down A.
+
+Invariants: every open/cover/handback is a normal commit (global lock + CAS on
+`update_id` + signal-last + `update_id+1`); never resets high-water. A coverer turn
+that opened under `handoff_epoch=E` re-asserts `epoch unchanged` at commit (kept —
+cheap belt & suspenders for coverage *semantics* atop the update_id CAS). Coverer
+never impersonates (writes `## Coverage Log` only). Logs: `handoff`, `covering`,
+`cover_turn_done`, `handback_suggested`.
+
+Resolved (per Codex review): (1) soft-only + manual coverage is the Slice 3 MVP;
+hard auto-detection → 3b. (2) coverer write = ceiling ∩ covered-role-write-capable.
+(3) keep the epoch assert. (4) only human-confirmed handback sets
+`next_actor=covered_actor`; coverer-suggested → awaiting_human. (5) the
+continuous-cover-turn gap is resolved by capping Slice 3 to a single cover turn.
+
 Safety: retries are bounded and mechanical (re-run the identical step); they never
 touch protocol state, never spawn a second concurrent turn, and a retry that
 itself hits a fatal class halts immediately. Default behavior with

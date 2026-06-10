@@ -23,5 +23,11 @@
   "last_writer": null,
   "last_update_id": 0,
   "failure": null,
-  "_comment": "Authoritative control state for the autonomous loop. status: active|paused|awaiting_human|done. next_actor: Claude|Codex|human|null (who is AUTHORIZED to act next). roles: per-agent role (peer|planner|executor|reviewer; healer/improver/coverer reserved, not yet active). resource_profiles describe subscription/resource-aware routing preferences; they guide prompts and dashboards but do not grant permissions. A role only NARROWS the watcher's --allow-write ceiling. pending_role_change holds an upgrade/peer/special-role request awaiting reviewer or human approval. Set status=active and next_actor=<agent> to start the loop."
+  "coverage_owner": null,
+  "covered_actor": null,
+  "handoff_epoch": 0,
+  "handoff_reason": null,
+  "cover_turns_used": 0,
+  "max_cover_turns": 1,
+  "_comment": "Authoritative control state for the autonomous loop. status: active|paused|awaiting_human|done. next_actor: Claude|Codex|human|null (who is AUTHORIZED to act next). roles: per-agent role (peer|planner|executor|reviewer; healer/improver/coverer reserved, not yet active). resource_profiles describe subscription/resource-aware routing preferences; they guide prompts and dashboards but do not grant permissions. A role only NARROWS the watcher's --allow-write ceiling. pending_role_change holds an upgrade/peer/special-role request awaiting reviewer or human approval. coverage_owner/covered_actor/handoff_epoch/cover_turns_used/max_cover_turns drive Slice 3 graceful handoff (coverer). Set status=active and next_actor=<agent> to start the loop."
 }
