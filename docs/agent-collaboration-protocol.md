@@ -67,3 +67,39 @@ then synthesize. The author then fixes the agreed findings and re-submits.
 
 This is not ceremony — every slice of this project caught a real bug in review
 that the author's own testing missed. The review *is* the quality bar.
+
+## 4. Interactive agents must ARM to react to board updates
+
+**The failure this fixes:** a headless watcher (`watch-collaboration.sh`)
+auto-reacts to board changes, but an **interactive** agent (a Claude/Codex chat
+window) is request/response — it is dormant between turns, and an external board
+write *cannot* wake it. So when the peer posts to the board, the interactive
+agent shows "no movement" and the human thinks the channel is dead. It isn't —
+the agent just wasn't listening.
+
+**The mechanism:** an interactive agent makes itself reactive by ARMING a
+blocking waiter in the background. When a backgrounded process exits, the agent's
+harness re-invokes the agent — so the agent wakes exactly when the board changes.
+
+```bash
+# Run in the BACKGROUND. Blocks until the peer bumps the signal (update_id
+# changes AND updated_by != you), then prints what changed and exits -> you wake.
+scripts/board-wait.sh --self Claude --project . &     # Codex uses --self Codex
+```
+
+**The loop every interactive agent follows:**
+1. After writing your turn to the board (and bumping the signal), **ARM**:
+   run `board-wait.sh --self <You>` in the background.
+2. On wake (the waiter exited):
+   - `CHANGED …` → read the named section, take your turn, write your reply +
+     bump the signal, then **re-arm** (go to 1).
+   - `TIMEOUT …` → nothing yet; just **re-arm**.
+3. Never assume silence = the peer is done. Silence = you weren't armed. If you
+   stop collaborating, say so on the board (`status: done`) so the peer can stop
+   arming too.
+
+**Why this is the whole point:** without arming, "two agents communicating" only
+works for headless watchers or a human relaying every message by hand. Arming is
+what makes an interactive agent a real, reactive participant. Treat "I posted but
+the peer didn't react" as a missing ARM, not a broken channel — re-arm and
+continue.
