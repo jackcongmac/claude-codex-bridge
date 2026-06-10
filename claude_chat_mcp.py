@@ -47,7 +47,8 @@ ALLOWED_TOOLS = os.environ.get(
 DEBUG = os.environ.get("CLAUDE_CHAT_DEBUG") == "1"
 
 # MCP protocol versions this server can speak. We echo the client's requested
-# version when we recognize it, else fall back to the newest we know.
+# version when we recognize it, else fall back to a conservative default that
+# all current MCP clients understand.
 SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
 DEFAULT_PROTOCOL = "2024-11-05"
 

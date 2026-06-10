@@ -85,8 +85,8 @@ The installer is idempotent. It:
 2. Copies the wrapper to `~/.claude-codex-bridge/`.
 3. Adds `[mcp_servers.claude_chat]` to `~/.codex/config.toml` (backing up first),
    pinning the detected `claude` path via `CLAUDE_BIN`.
-4. Runs `claude mcp add codex -s user -- codex mcp-server` (user scope → all
-   projects).
+4. Registers Codex as a user-scope Claude MCP server (all projects), using the
+   detected absolute `codex` path: `claude mcp add codex -s user -- "$CODEX_BIN" mcp-server`.
 
 Then **restart Codex** so it loads the new server.
 

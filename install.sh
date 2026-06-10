@@ -69,6 +69,8 @@ with open(cfg) as f:
 
 if re.search(r'(?m)^\[mcp_servers\.claude_chat\]', text):
     print("[!] [mcp_servers.claude_chat] already present in config.toml - leaving as-is.")
+    print("    (BRIDGE_READONLY / tool-allowlist changes only apply when the block is first created;")
+    print("     edit CLAUDE_CHAT_ALLOWED_TOOLS in that block, or remove it and re-run, to change perms.)")
 else:
     shutil.copy(cfg, cfg + ".bak_" + datetime.datetime.now().strftime("%Y%m%d_%H%M%S"))
     def s(v):  # JSON strings are valid TOML basic strings for our values
