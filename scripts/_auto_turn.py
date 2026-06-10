@@ -23,11 +23,8 @@ import os
 import sys
 import json
 import time
-import errno
-import socket
 import argparse
 import subprocess
-import tempfile
 
 from bridge_common import *  # shared primitives (atomic I/O, lock, log, board, roles, runners)
 
