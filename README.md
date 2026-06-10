@@ -156,6 +156,50 @@ The loop:
 > in). The bridge gives you both halves; the board is what makes a review →
 > execute → re-review loop actually work.
 
+## Autonomous mode (event-driven, no manual poke)
+
+Manual mode needs a human to invoke each turn. Autonomous mode runs the loop
+itself: a lightweight watcher fires a headless agent turn whenever the *other*
+agent commits. Idle cost is ~0 (a file watcher / mtime poll — no tokens until
+there's real work).
+
+```bash
+# one per side (two shells / two machines); read-only by default
+scripts/watch-collaboration.sh --as claude --project .
+scripts/watch-collaboration.sh --as codex  --project .   # add --allow-write to let it edit files
+```
+
+`collaboration_state.json` is the authoritative control state (ships **paused**).
+To start the loop, set `status:"active"` and `next_actor` to whichever agent
+moves first, then bump `collaboration_signal.json`. Watch it live:
+
+```bash
+tail -f collaboration_auto.log     # queued / started / committed / halted, with cost
+```
+
+How a turn is made safe (all in `_auto_turn.py`, not left to the model):
+
+- **Whose turn:** a turn runs only if `next_actor == self`, the signal's
+  `update_id` is newer than this watcher's high-water mark, and `status=="active"`.
+- **Draft → commit-under-lock:** the model only returns a JSON draft; the harness
+  takes a global lock, re-checks `update_id` (CAS), then writes the board, state,
+  and signal (signal last = commit marker). Two agents can't write concurrently.
+- **Bounded & safe:** `max_turns` caps the loop; any anomaly (timeout, CAS
+  conflict, corrupt JSON, bad draft) halts to `awaiting_human` and notifies — it
+  never silently drops or loops away your budget.
+
+Caps & safety knobs (in `collaboration_state.json`, or `--max-turns`/`--max-cost`
+on the watcher):
+
+| Knob | Effect |
+| --- | --- |
+| `status` | `active` runs; `paused`/`done`/`awaiting_human` stop the loop |
+| `max_turns` | hard cap on total turns (governs **both** sides) |
+| `max_cost_usd` | USD cap — **Claude side only**; `codex exec` cost isn't parsed, so the Codex side is governed by `max_turns` |
+| `--allow-write` | lets that side edit project files (default: read-only, no Bash) |
+
+Kill switch: Ctrl-C the watcher, or set `status:"paused"`/`"done"`.
+
 ## Configuration (env vars on the Codex `claude_chat` server)
 
 | Variable | Default | Purpose |
