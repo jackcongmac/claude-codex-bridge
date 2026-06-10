@@ -110,6 +110,8 @@ to let Codex *talk to a reasoning Claude*, this project wraps `claude -p`
 > Claude credentials — i.e. Codex can drive file changes on your machine through
 > Claude. Install read-only with `BRIDGE_READONLY=1 ./install.sh`, or scope it
 > later via `CLAUDE_CHAT_ALLOWED_TOOLS`. There is no `Bash` access in either mode.
+> See [`docs/read-only-setup.md`](docs/read-only-setup.md) for the safest
+> evaluation setup and a redacted config check.
 
 ```bash
 git clone https://github.com/jackcongmac/claude-codex-bridge.git
@@ -269,6 +271,7 @@ To make the colleague read-only, set
 `CLAUDE_CHAT_ALLOWED_TOOLS="Read Grep Glob"`. To give it shell access, add
 `Bash` (understand the risk: Codex could then drive arbitrary commands on your
 machine through Claude).
+See [`docs/read-only-setup.md`](docs/read-only-setup.md) for a safe setup guide.
 
 ## Gotcha that will bite you if you reimplement this
 

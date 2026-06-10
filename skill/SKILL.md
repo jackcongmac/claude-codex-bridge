@@ -32,6 +32,8 @@ If `claude` is at a non-standard path: `CLAUDE_BIN=/path/to/claude ./install.sh`
 caller's directory (no shell). For a read-only colleague install with
 `BRIDGE_READONLY=1 ./install.sh`, or set
 `CLAUDE_CHAT_ALLOWED_TOOLS="Read Grep Glob"` on the `claude_chat` server.
+See `docs/read-only-setup.md` for the safe evaluation setup and a redacted
+config check.
 
 ## Using the two directions
 
