@@ -1,0 +1,53 @@
+---
+name: claude-codex-bridge
+description: Use when the user wants Claude Code and Codex to talk to each other — setting up, debugging, or using the bidirectional MCP bridge so Codex can call Claude (mcp__claude_chat__ask_claude) and Claude can call Codex (mcp__codex__codex). Triggers on "let Codex talk to Claude", "Claude/Codex collaboration", "ask_claude", "claude_chat MCP", or installing this bridge.
+---
+
+# claude-codex-bridge
+
+A bidirectional MCP bridge letting Claude Code and Codex call each other as tools.
+The Claude side is a **persistent, project-aware colleague** (per-directory memory,
+reads `collaboration.md`, can read/edit files — no shell).
+
+## Install / repair the bridge
+
+Run the installer from the repo root (idempotent):
+
+```bash
+./install.sh
+```
+
+It detects `python3` / `claude` / `codex`, installs the wrapper to
+`~/.claude-codex-bridge/`, adds `[mcp_servers.claude_chat]` to
+`~/.codex/config.toml`, and registers `codex` as a user-scope Claude MCP server.
+**Codex must be restarted** afterward to load the new server.
+
+If `claude` is at a non-standard path: `CLAUDE_BIN=/path/to/claude ./install.sh`.
+
+## Using the two directions
+
+- **Claude → Codex:** call `mcp__codex__codex` (returns a `threadId`); continue
+  with `mcp__codex__codex-reply` passing that `threadId` to keep Codex's memory.
+- **Codex → Claude:** call `mcp__claude_chat__ask_claude` with a `prompt`. Memory
+  is auto-pinned per working directory — no need to pass `session_id`. Pass
+  `new_session: true` to reset, or `session_id` to target a specific session.
+
+## Recommended collaboration pattern
+
+Keep a shared `collaboration.md` board in the project root. Each agent reads it
+before acting and writes durable findings back to it. The MCP calls are the
+"poke the other agent to take a turn" channel; `collaboration.md` is the durable
+shared memory. The Claude colleague is told to consult it automatically.
+
+## Troubleshooting
+
+- **Codex doesn't see `claude_chat`:** it wasn't restarted, or
+  `[mcp_servers.claude_chat]` is missing from `~/.codex/config.toml`.
+- **Calls hang forever:** an MCP stdio server must read stdin with
+  `readline()`, never `for line in sys.stdin` (block-buffers on a pipe so
+  `initialize` never arrives). The shipped wrapper already does this.
+- **"claude CLI not found":** set `CLAUDE_BIN` in the
+  `[mcp_servers.claude_chat.env]` block of `~/.codex/config.toml`.
+- **Colleague can't edit / read files:** check `CLAUDE_CHAT_ALLOWED_TOOLS`.
+
+See `README.md` for architecture, configuration, and security notes.

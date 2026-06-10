@@ -1,0 +1,15 @@
+# Local session store (per-project Claude memory ids)
+sessions/
+*.session
+
+# Codex/Claude config backups
+*.bak
+*.bak_*
+config.toml
+
+# OS / editor cruft
+.DS_Store
+._*
+*.swp
+__pycache__/
+*.pyc
