@@ -17,6 +17,32 @@ this draft. `resource-aware-routing.md` currently documents only ONE preset
 | 7 | **Asymmetric context windows** (e.g. Claude 1M vs Codex) | context capacity | route large-context synthesis to the bigger-window agent regardless of tier | `context_full` handoff from the smaller-window side |
 | 8 | **Trust/permission asymmetry** | write authority | only one side gets `--allow-write`; the other reviews | n/a (permission, not limit) |
 
+## Billing mode (orthogonal axis — DON'T skip auto-reload)
+
+Tier is *capacity*; billing *mode* decides whether hitting a limit is a hard stop.
+
+| Billing mode | What happens at the limit | Natural circuit breaker | Bridge implication |
+| --- | --- | --- | --- |
+| Subscription (Max/Pro) | rate-limit / quota pauses you | the provider's rate limit | handoff/coverer may trigger; caps are backup |
+| API, hard cap (no reload) | balance hits 0 → stops | the balance | cost-exhaustion ends the loop |
+| **API + credit-card AUTO-RELOAD** | **card tops up → the agent KEEPS RUNNING** | **NONE — removed by auto-reload** | ⚠️ the bridge's `max_cost`/`max_turns` are the ONLY brake; an unattended loop can spend without bound |
+
+**Auto-reload is the dangerous case for autonomous mode.** With no provider-side
+stop, `max_cost_usd` + `max_turns` are the sole guard against runaway spend. So:
+- For auto-reload users, set caps CONSERVATIVELY and treat them as hard safety,
+  not hints.
+- The **Codex side has no parseable cost**, so it is governed by `max_turns`
+  ONLY — an auto-reload Codex user has no `$` guard at all; the turn cap is the
+  entire brake. Flag this loudly.
+- This reinforces the Slice 4 improver **safety floor**: the improver must NEVER
+  raise `max_cost`/`max_turns` — for an auto-reload user that is removing the brakes.
+- The coverer/handoff is NOT the mechanism here (no hard limit to hand off from);
+  the loop simply halts on the caps.
+
+Suggest a `resource_profiles[X].billing` field (`subscription` | `api_hard_cap` |
+`api_auto_reload`) so the dashboard can warn when auto-reload + autonomous mode are
+combined.
+
 ## Tie-in with the coverer (Slice 3)
 
 Resource profiles should *inform* the handoff/coverer feature: `resource_profiles[X].tier`
