@@ -277,9 +277,10 @@ _RATE_MARKERS = ("rate limit", "rate_limit", "429", "too many requests", "overlo
 
 class TransientError(Exception):
     """A recoverable model-call failure (launch-level / rate-limited)."""
-    def __init__(self, msg, retry_after=None):
+    def __init__(self, msg, retry_after=None, cls="transient"):
         super().__init__(msg)
         self.retry_after = retry_after
+        self.cls = cls
 
 
 class MalformedDraft(Exception):
@@ -311,17 +312,18 @@ def run_claude(prompt, project, allow_write, sess_path):
         p = subprocess.run(cmd, capture_output=True, text=True,
                            timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
     except FileNotFoundError as e:
-        raise TransientError("claude launch failed: %s" % e)
-    blob = ((p.stdout or "") + (p.stderr or "")).lower()
-    if _looks_rate_limited(blob):
-        raise TransientError("claude rate-limited", _parse_retry_after(blob))
+        raise TransientError("claude launch failed: %s" % e, cls="launch_failure")
+    # Success path FIRST. Never scan a successful draft for rate markers — the
+    # draft text may legitimately mention "rate limit"/"429"/"overloaded".
     try:
         data = json.loads(p.stdout)
-    except Exception:
-        raise MalformedDraft("claude returned a non-JSON envelope")
-    try:
         draft = _extract_json(data.get("result", ""))
     except Exception:
+        blob = (p.stderr or "").lower()
+        if p.returncode != 0:
+            blob += " " + (p.stdout or "").lower()
+        if _looks_rate_limited(blob):
+            raise TransientError("claude rate-limited", _parse_retry_after(blob), cls="rate_limit")
         raise MalformedDraft("claude result is not a parseable draft JSON")
     cost = data.get("total_cost_usd")
     new_sid = data.get("session_id")
@@ -353,24 +355,29 @@ def run_codex(prompt, project, allow_write, sess_path):
             p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
                                timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
         except FileNotFoundError as e:
-            raise TransientError("codex launch failed: %s" % e)
-        blob = ((p.stdout or "") + (p.stderr or "")).lower()
+            raise TransientError("codex launch failed: %s" % e, cls="launch_failure")
+        # Success path FIRST — never scan a successful final message for rate markers.
+        if os.path.exists(last_f):
+            try:
+                with open(last_f) as f:
+                    # cost not reliably parseable -> None; max_turns governs the Codex side
+                    return _extract_json(f.read()), None
+            except (ValueError, json.JSONDecodeError):
+                pass  # fall through to failure classification
+        blob = (p.stderr or "").lower()
+        if p.returncode != 0:
+            blob += " " + (p.stdout or "").lower()
         if _looks_rate_limited(blob):
-            raise TransientError("codex rate-limited", _parse_retry_after(blob))
+            raise TransientError("codex rate-limited", _parse_retry_after(blob), cls="rate_limit")
         if not os.path.exists(last_f):
             raise RuntimeError("codex exec produced no final message (exit %s): %s"
                                % (p.returncode, (p.stderr or "")[-200:]))
-        try:
-            with open(last_f) as f:
-                draft = _extract_json(f.read())
-        except (ValueError, json.JSONDecodeError):
-            raise MalformedDraft("codex final message is not a parseable draft JSON")
+        raise MalformedDraft("codex final message is not a parseable draft JSON")
     finally:
         try:
             import shutil as _sh; _sh.rmtree(tmpd, ignore_errors=True)
         except Exception:
             pass
-    return draft, None  # codex exec cost not reliably parseable -> None; max_turns governs the Codex side
 
 
 # ---------- the turn ----------
@@ -527,14 +534,14 @@ def main():
         except TransientError as e:
             ra = e.retry_after
             if ra is not None and ra > MAX_SINGLE_WAIT:
-                halt(project, state_p, lock_p, run_id, "rate_limited_too_long", retry_after=ra)
+                halt(project, state_p, lock_p, run_id, "rate_limited_too_long", cls=e.cls, retry_after=ra)
             if attempt >= MAX_REPAIR:
-                halt(project, state_p, lock_p, run_id, "repair_exhausted", detail=str(e)[:160])
+                halt(project, state_p, lock_p, run_id, "repair_exhausted", cls=e.cls, detail=str(e)[:160])
             wait = min(MAX_SINGLE_WAIT, ra if ra else float(2 ** attempt))
             if total_wait + wait > MAX_TOTAL_WAIT:
-                halt(project, state_p, lock_p, run_id, "repair_exhausted", detail="retry wait budget exceeded")
+                halt(project, state_p, lock_p, run_id, "repair_exhausted", cls=e.cls, detail="retry wait budget exceeded")
             attempt += 1
-            log_event(project, "repair_attempt", run_id=run_id, n=attempt, kind="transient", wait=wait)
+            log_event(project, "repair_attempt", run_id=run_id, n=attempt, kind="transient", cls=e.cls, wait=wait)
             time.sleep(wait)
             total_wait += wait
         except Exception as e:
