@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+#
+# watch-collaboration.sh — autonomous-mode watcher for claude-codex-bridge.
+#
+# Watches collaboration_signal.json; on every change it runs ONE _auto_turn.py
+# for this side. The watcher is deliberately dumb: all gating (whose turn,
+# high-water dedupe, budget, CAS, halt) lives in _auto_turn.py. Idle cost is ~0
+# (a file watcher or a stat poll — no LLM tokens until there is real work).
+#
+# Usage:
+#   watch-collaboration.sh --as claude|codex [--project DIR] [--allow-write]
+#                          [--max-turns N] [--max-cost USD] [--lock-ttl SECONDS]
+#
+# Start ONE per side (typically on the two machines / two shells driving each
+# agent). Ctrl-C to stop. SAFETY: omit --allow-write for a read-only loop.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SIDE=""; PROJECT="$PWD"; ALLOW_WRITE=""; LOCK_TTL="600"
+MAX_TURNS=""; MAX_COST=""; POLL_INTERVAL="${BRIDGE_POLL_INTERVAL:-2}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --as) SIDE="$2"; shift 2;;
+    --project) PROJECT="$2"; shift 2;;
+    --allow-write) ALLOW_WRITE="--allow-write"; shift;;
+    --max-turns) MAX_TURNS="$2"; shift 2;;
+    --max-cost) MAX_COST="$2"; shift 2;;
+    --lock-ttl) LOCK_TTL="$2"; shift 2;;
+    *) echo "unknown arg: $1" >&2; exit 2;;
+  esac
+done
+
+[ "$SIDE" = "claude" ] || [ "$SIDE" = "codex" ] || { echo "[x] --as must be claude or codex" >&2; exit 2; }
+PROJECT="$(cd "$PROJECT" && pwd)"
+SIGNAL="$PROJECT/collaboration_signal.json"
+STATE="$PROJECT/collaboration_state.json"
+PY3="$(command -v python3)"
+
+[ -f "$STATE" ] || { echo "[x] no collaboration_state.json in $PROJECT — run scripts/init-collaboration.sh first" >&2; exit 1; }
+
+# Optionally patch budget caps into state at startup (convenience).
+if [ -n "$MAX_TURNS" ] || [ -n "$MAX_COST" ]; then
+  MAX_TURNS="$MAX_TURNS" MAX_COST="$MAX_COST" STATE="$STATE" "$PY3" - <<'PY'
+import os, json
+p=os.environ["STATE"]; s=json.load(open(p))
+if os.environ.get("MAX_TURNS"): s["max_turns"]=int(os.environ["MAX_TURNS"])
+if os.environ.get("MAX_COST"):  s["max_cost_usd"]=float(os.environ["MAX_COST"])
+json.dump(s, open(p,"w"), ensure_ascii=False, indent=2)
+PY
+fi
+
+run_turn() {
+  "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
+    >/dev/null 2>>"$PROJECT/collaboration_auto.log" || true   # exit codes are advisory; harness logs
+}
+
+echo "[==>] watching $SIGNAL"
+echo "      side=$SIDE  project=$PROJECT  allow_write=${ALLOW_WRITE:-no}  lock_ttl=${LOCK_TTL}s"
+echo "      tail -f \"$PROJECT/collaboration_auto.log\" to watch the conversation."
+
+# Run once at startup in case a turn is already pending for this side.
+run_turn
+
+if command -v fswatch >/dev/null 2>&1; then
+  echo "[==>] using fswatch"
+  # -l latency debounces bursts; each event triggers one turn (harness dedupes).
+  fswatch -o -l 0.5 "$SIGNAL" | while read -r _; do run_turn; done
+elif command -v inotifywait >/dev/null 2>&1; then
+  echo "[==>] using inotifywait"
+  while inotifywait -qq -e close_write -e moved_to "$(dirname "$SIGNAL")" >/dev/null 2>&1; do
+    run_turn
+  done
+else
+  echo "[==>] no fswatch/inotifywait — falling back to mtime polling every ${POLL_INTERVAL}s"
+  echo "      (install fswatch for lower latency: brew install fswatch)"
+  LAST=""
+  while true; do
+    CUR="$(stat -f %m "$SIGNAL" 2>/dev/null || stat -c %Y "$SIGNAL" 2>/dev/null || echo "")"
+    if [ -n "$CUR" ] && [ "$CUR" != "$LAST" ]; then LAST="$CUR"; run_turn; fi
+    sleep "$POLL_INTERVAL"
+  done
+fi

@@ -1,0 +1,13 @@
+{
+  "status": "paused",
+  "next_actor": null,
+  "turn": 0,
+  "max_turns": 12,
+  "cost_so_far_usd": 0.0,
+  "max_cost_usd": 5.0,
+  "run_id": null,
+  "last_writer": null,
+  "last_update_id": 0,
+  "failure": null,
+  "_comment": "Authoritative control state for the autonomous loop. status: active|paused|awaiting_human|done. next_actor: Claude|Codex|human|null (who is AUTHORIZED to act next). Set status=active and next_actor=<agent> to start the loop. Watchers refuse to run if this file is absent."
+}

@@ -24,20 +24,32 @@ copy_if_absent() {
   fi
 }
 
-copy_if_absent "$REPO_DIR/templates/collaboration.md"        "$TARGET/collaboration.md"
+copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$TARGET/collaboration.md"
 copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$TARGET/collaboration_signal.json"
+copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$TARGET/collaboration_state.json"
 
 cat <<EOF
 
 Coordination layer ready in: $TARGET
 
-How the two agents use it:
+Manual mode (works today):
   1. Both read collaboration_signal.json first; only re-read collaboration.md
      when update_id changes.
-  2. Each writes status/findings to its own Outbox section in collaboration.md,
-     then bumps collaboration_signal.json (update_id + summary).
+  2. Each writes findings to its own Outbox in collaboration.md, then bumps
+     collaboration_signal.json (update_id + summary).
   3. Use the MCP bridge (mcp__codex__codex / mcp__claude_chat__ask_claude) to
      poke the other agent to take a turn.
+
+Autonomous mode (event-driven, no manual poke):
+  - collaboration_state.json is the authoritative control state (starts paused).
+  - Start a watcher per side; it auto-runs a turn when the other agent commits:
+        scripts/watch-collaboration.sh --as claude --project "$TARGET"
+        scripts/watch-collaboration.sh --as codex  --project "$TARGET"
+  - To start the loop, set status="active" and next_actor to whichever agent
+    should move first in collaboration_state.json, then bump the signal.
+  - Watch it: tail -f "$TARGET/collaboration_auto.log"
+  - SAFETY: read-only by default; pass --allow-write to let an agent edit project
+    files. max_turns / max_cost in the state file cap the loop.
 
 Fill in the <placeholders> (roles, project state) to match your project.
 EOF

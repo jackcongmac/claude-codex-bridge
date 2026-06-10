@@ -1,0 +1,415 @@
+#!/usr/bin/env python3
+"""_auto_turn.py — one autonomous coordination turn for claude-codex-bridge.
+
+The DETERMINISTIC harness owns every protocol-critical operation (gates, global
+lock, CAS, per-watcher high-water mark, state/signal writes, logging, budget caps,
+failure->halt). The MODEL only produces *content* (a draft), because a model can't
+be trusted to follow the protocol byte-for-byte.
+
+Flow (matches DESIGN_autonomous_watcher.md v4, draft -> commit-under-lock):
+  read signal/state/high-water -> gates -> advance high-water -> run headless
+  agent to get a JSON draft (NO file writes by the model) -> acquire global lock
+  -> CAS re-check update_id -> append draft to the board outbox, write state,
+  write signal LAST -> release lock -> log. Any anomaly -> halt to awaiting_human.
+
+Invoked by watch-collaboration.sh; can also be run once by hand for testing.
+
+Usage:
+  _auto_turn.py --as claude|codex [--project DIR] [--allow-write]
+                [--lock-ttl SECONDS] [--run-id ID]
+Exit codes: 0 acted, 10 skipped (gate not met), 20 halted (awaiting_human), 30 error.
+"""
+import os
+import sys
+import json
+import time
+import errno
+import socket
+import argparse
+import subprocess
+import tempfile
+
+OTHER = {"Claude": "Codex", "Codex": "Claude"}
+VALID_STATUS = {"active", "paused", "awaiting_human", "done"}
+VALID_ACTOR = {"Claude", "Codex", "human", None}
+
+
+def now_str():
+    return time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+# ---------- file helpers (atomic) ----------
+
+def read_json(path, default=None):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return default
+    except Exception as e:
+        raise RuntimeError("corrupt JSON in %s: %s" % (path, e))
+
+
+def atomic_write(path, text):
+    d = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".tmp_")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)  # atomic on POSIX
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def atomic_write_json(path, obj):
+    atomic_write(path, json.dumps(obj, ensure_ascii=False, indent=2) + "\n")
+
+
+# ---------- logging / notify ----------
+
+LOG_MAX_BYTES = int(os.environ.get("BRIDGE_LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+
+
+def log_event(project, event, **fields):
+    path = os.path.join(project, "collaboration_auto.log")
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
+            os.replace(path, path + ".1")  # single-generation rotation
+        rec = {"ts": now_str(), "event": event}
+        rec.update(fields)
+        with open(path, "a") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def notify(text):
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["osascript", "-e",
+                            'display notification %s with title "claude-codex-bridge"'
+                            % json.dumps(text)], timeout=5)
+        else:
+            subprocess.run(["notify-send", "claude-codex-bridge", text], timeout=5)
+    except Exception:
+        pass
+
+
+# ---------- global lock (atomic create + stale handling) ----------
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        return e.errno != errno.ESRCH
+
+
+def acquire_lock(lock_path, run_id, ttl, wait=0):
+    deadline = time.time() + wait
+    payload = json.dumps({"pid": os.getpid(), "host": socket.gethostname(),
+                          "run_id": run_id, "acquired_at": time.time()})
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            os.write(fd, payload.encode())
+            os.close(fd)
+            return True
+        except FileExistsError:
+            # maybe stale?
+            try:
+                info = json.load(open(lock_path))
+                age = time.time() - float(info.get("acquired_at", 0))
+                holder = int(info.get("pid", -1))
+                if age > ttl and not _pid_alive(holder):
+                    os.unlink(lock_path)  # break stale lock
+                    continue
+            except Exception:
+                pass
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.2)
+
+
+def release_lock(lock_path):
+    try:
+        os.unlink(lock_path)
+    except FileNotFoundError:
+        pass
+
+
+# ---------- board section append ----------
+
+def append_to_outbox(board_path, actor, markdown):
+    """Append markdown under the '## <actor> Outbox' header (create if missing)."""
+    header = "## %s Outbox" % actor
+    entry = "\n### %s\n\n%s\n" % (now_str(), markdown.strip())
+    try:
+        with open(board_path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = "# Agent Collaboration Board\n"
+    idx = text.find(header)
+    if idx == -1:
+        text = text.rstrip() + "\n\n" + header + "\n" + entry
+    else:
+        # insert right after the header line
+        nl = text.find("\n", idx)
+        nl = len(text) if nl == -1 else nl + 1
+        text = text[:nl] + entry + text[nl:]
+    atomic_write(board_path, text)
+
+
+def read_section(board_path, header_name):
+    """Return the text of the '## <header_name>' section, or '' if absent."""
+    try:
+        text = open(board_path).read()
+    except FileNotFoundError:
+        return ""
+    needle = "## " + header_name
+    idx = text.find(needle)
+    if idx == -1:
+        return ""
+    nxt = text.find("\n## ", idx + len(needle))
+    return text[idx: (len(text) if nxt == -1 else nxt)].strip()
+
+
+# ---------- model invocation ----------
+
+DRAFT_INSTRUCTION = (
+    "You are one half of an autonomous two-agent collaboration (Claude + Codex) "
+    "coordinated through a shared board. You have been handed a turn. Do your "
+    "role's work for THIS turn only, then reply.\n\n"
+    "Return ONLY a single JSON object, no prose around it:\n"
+    '{"reply_markdown": "<what to append to your outbox: findings/answer/handoff>",'
+    ' "next_actor": "Claude|Codex|human|null",'
+    ' "status": "active|awaiting_human|done",'
+    ' "summary": "<one short line describing what you did>"}\n\n'
+    "Rules: set next_actor to the OTHER agent if you need them to act next; to "
+    "\"human\" or status \"awaiting_human\" if a human decision is needed; status "
+    "\"done\" if the work is complete. Do NOT edit the board, signal, or state "
+    "files yourself — the harness commits your reply. Keep it concise."
+)
+
+
+def _extract_json(text):
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    # find outermost {...}
+    s, e = text.find("{"), text.rfind("}")
+    if s != -1 and e != -1 and e > s:
+        return json.loads(text[s:e + 1])
+    raise ValueError("no JSON object in model output")
+
+
+def run_claude(prompt, project, allow_write, sess_path):
+    claude = os.environ.get("CLAUDE_BIN") or "claude"
+    tools = ["Read", "Grep", "Glob"] + (["Edit", "Write"] if allow_write else [])
+    cmd = [claude, "-p", prompt, "--output-format", "json",
+           "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+           "--permission-mode", "acceptEdits" if allow_write else "default",
+           "--add-dir", project]
+    sid = (read_json(sess_path, {}) or {}).get("claude_session_id")
+    if sid:
+        cmd += ["--resume", sid]
+    cmd += ["--allowedTools"] + tools
+    p = subprocess.run(cmd, capture_output=True, text=True,
+                       timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+    data = json.loads(p.stdout)
+    draft = _extract_json(data.get("result", ""))
+    cost = data.get("total_cost_usd")
+    new_sid = data.get("session_id")
+    if new_sid:
+        st = read_json(sess_path, {}) or {}
+        st["claude_session_id"] = new_sid
+        atomic_write_json(sess_path, st)
+    return draft, cost
+
+
+def run_codex(prompt, project, allow_write, sess_path):
+    # The model is instructed to return the JSON draft as its final message; we
+    # read it via --output-last-message and parse it (symmetric to the Claude
+    # side). NOTE: --output-schema is intentionally NOT used — codex exec exits
+    # non-zero with it in testing. --ignore-user-config keeps the spawned Codex
+    # fast and free of the user's MCP stack (no recursion into claude_chat).
+    codex = os.environ.get("CODEX_BIN") or "codex"
+    last_f = os.path.join(tempfile.mkdtemp(), "last.json")
+    sandbox = "workspace-write" if allow_write else "read-only"
+    base = [codex, "exec"]
+    have_session = bool((read_json(sess_path, {}) or {}).get("codex_resumed"))
+    if have_session:
+        base += ["resume", "--last"]
+    cmd = base + [prompt, "--output-last-message", last_f, "-C", project,
+                  "--skip-git-repo-check", "--ignore-user-config", "-s", sandbox]
+    p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                       timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+    if not os.path.exists(last_f):
+        raise RuntimeError("codex exec produced no final message (exit %s): %s"
+                           % (p.returncode, (p.stderr or "")[-200:]))
+    with open(last_f) as f:
+        draft = _extract_json(f.read())
+    st = read_json(sess_path, {}) or {}
+    st["codex_resumed"] = True
+    atomic_write_json(sess_path, st)
+    return draft, None  # codex exec cost not reliably parseable -> None (max_turns governs)
+
+
+# ---------- the turn ----------
+
+def halt(project, state_path, lock_path, run_id, reason, **extra):
+    """Write awaiting_human under the lock (best-effort), notify, exit 20."""
+    got = acquire_lock(lock_path, run_id, ttl=0, wait=2)
+    state = read_json(state_path, {}) or {}
+    state["status"] = "awaiting_human"
+    state["failure"] = dict(reason=reason, at=now_str(), **extra)
+    try:
+        atomic_write_json(state_path, state)
+    finally:
+        if got:
+            release_lock(lock_path)
+    log_event(project, "halted", run_id=run_id, reason=reason, **extra)
+    notify("Auto-loop halted: %s (awaiting human)" % reason)
+    sys.exit(20)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--as", dest="side", required=True, choices=["claude", "codex"])
+    ap.add_argument("--project", default=os.getcwd())
+    ap.add_argument("--allow-write", action="store_true")
+    ap.add_argument("--lock-ttl", type=int, default=600)
+    ap.add_argument("--run-id", default=None)
+    a = ap.parse_args()
+
+    project = os.path.abspath(a.project)
+    self_actor = "Claude" if a.side == "claude" else "Codex"
+    run_id = a.run_id or ("run-%d-%s" % (int(time.time()), self_actor.lower()))
+
+    signal_p = os.path.join(project, "collaboration_signal.json")
+    state_p = os.path.join(project, "collaboration_state.json")
+    board_p = os.path.join(project, "collaboration.md")
+    lock_p = os.path.join(project, "collaboration.lock")
+    hw_p = os.path.join(project, ".watcher_%s.state" % a.side)
+    sess_p = os.path.join(project, ".watcher_%s.session" % a.side)
+
+    state = read_json(state_p)
+    if state is None:
+        print("no collaboration_state.json -> autonomous mode off"); sys.exit(10)
+    signal = read_json(signal_p)
+    if signal is None:
+        print("no signal yet"); sys.exit(10)
+
+    hw = (read_json(hw_p, {}) or {}).get("last_processed_update_id", 0)
+    uid = signal.get("update_id", 0)
+
+    # ---- gates ----
+    if state.get("status") != "active":
+        print("status != active (%s)" % state.get("status")); sys.exit(10)
+    if uid < hw:
+        halt(project, state_p, lock_p, run_id, "update_id_regression", seen=uid, hw=hw)
+    if uid <= hw:
+        print("no new update (uid=%s hw=%s)" % (uid, hw)); sys.exit(10)
+    if state.get("next_actor") != self_actor:
+        print("not my turn (next_actor=%s)" % state.get("next_actor")); sys.exit(10)
+    if signal.get("updated_by") == self_actor:
+        print("own write, ignoring"); sys.exit(10)
+    if state.get("turn", 0) >= state.get("max_turns", 12):
+        halt(project, state_p, lock_p, run_id, "max_turns_reached",
+             turn=state.get("turn"), max_turns=state.get("max_turns"))
+    mc = state.get("max_cost_usd")
+    if mc is not None and state.get("cost_so_far_usd", 0) >= mc:
+        halt(project, state_p, lock_p, run_id, "max_cost_reached",
+             cost=state.get("cost_so_far_usd"), max_cost=mc)
+
+    # ---- advance high-water BEFORE running the model (dedupe replayed fs events) ----
+    atomic_write_json(hw_p, {"last_processed_update_id": uid})
+    seen = uid
+
+    changed = signal.get("changed_section", "")
+    section_text = read_section(board_p, changed) if changed else ""
+    envelope = {
+        "run_id": run_id, "update_id": uid, "you_are": self_actor,
+        "changed_section": changed, "summary_from_peer": signal.get("summary", ""),
+        "commit_contract": "harness_commits_your_draft_under_lock",
+        "allow_project_writes": bool(a.allow_write),
+    }
+    prompt = (DRAFT_INSTRUCTION + "\n\nTURN ENVELOPE:\n" + json.dumps(envelope, ensure_ascii=False)
+              + "\n\nThe section that just changed (" + (changed or "n/a") + "):\n"
+              + (section_text or "(empty)")
+              + "\n\nAlso read collaboration.md / the project as needed for context.")
+
+    log_event(project, "started", run_id=run_id, actor=self_actor, update_id=uid, changed_section=changed)
+
+    # ---- run the model (NO lock held; model produces a draft only) ----
+    try:
+        if a.side == "claude":
+            draft, cost = run_claude(prompt, project, a.allow_write, sess_p)
+        else:
+            draft, cost = run_codex(prompt, project, a.allow_write, sess_p)
+    except subprocess.TimeoutExpired:
+        halt(project, state_p, lock_p, run_id, "agent_timeout")
+    except Exception as e:
+        halt(project, state_p, lock_p, run_id, "agent_error", detail=str(e)[:200])
+
+    # validate draft
+    nxt = draft.get("next_actor")
+    nxt = None if nxt in (None, "null", "") else nxt
+    st_new = draft.get("status", "active")
+    if nxt not in VALID_ACTOR or st_new not in VALID_STATUS:
+        halt(project, state_p, lock_p, run_id, "invalid_draft",
+             next_actor=str(nxt), status=str(st_new))
+    if mc is not None and cost is None and a.side == "claude":
+        halt(project, state_p, lock_p, run_id, "cost_unparseable")
+
+    # ---- acquire lock and commit (CAS) ----
+    if not acquire_lock(lock_p, run_id, ttl=a.lock_ttl, wait=30):
+        log_event(project, "lock_busy", run_id=run_id); sys.exit(10)
+    try:
+        cur = read_json(signal_p) or {}
+        if cur.get("update_id") != seen:
+            release_lock(lock_p)
+            halt(project, state_p, lock_p, run_id, "cas_conflict",
+                 seen=seen, now=cur.get("update_id"))
+        cur_state = read_json(state_p) or {}
+        if cur_state.get("status") != "active" or cur_state.get("next_actor") != self_actor:
+            log_event(project, "authority_changed", run_id=run_id); sys.exit(10)
+
+        new_uid = seen + 1
+        append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
+        cur_state.update({
+            "turn": cur_state.get("turn", 0) + 1,
+            "next_actor": nxt if nxt is not None else OTHER[self_actor],
+            "status": st_new,
+            "last_writer": self_actor,
+            "last_update_id": new_uid,
+            "cost_so_far_usd": round(cur_state.get("cost_so_far_usd", 0) + (cost or 0), 6),
+            "run_id": run_id,
+            "failure": None,
+        })
+        atomic_write_json(state_p, cur_state)
+        atomic_write_json(signal_p, {  # signal written LAST = commit marker
+            "update_id": new_uid, "updated_at": now_str(), "updated_by": self_actor,
+            "changed_section": "%s Outbox" % self_actor,
+            "summary": draft.get("summary", "")[:200],
+        })
+        atomic_write_json(hw_p, {"last_processed_update_id": new_uid})  # our own write
+    finally:
+        release_lock(lock_p)
+
+    log_event(project, "committed", run_id=run_id, actor=self_actor,
+              update_id=new_uid, next_actor=cur_state["next_actor"],
+              status=st_new, turn=cur_state["turn"],
+              cost=cost, cost_so_far=cur_state["cost_so_far_usd"])
+    if st_new != "active":
+        notify("Auto-loop %s after %s's turn (turn %d)" % (st_new, self_actor, cur_state["turn"]))
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
