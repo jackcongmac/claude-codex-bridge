@@ -24,6 +24,11 @@ It detects `python3` / `claude` / `codex`, installs the wrapper to
 
 If `claude` is at a non-standard path: `CLAUDE_BIN=/path/to/claude ./install.sh`.
 
+**Security:** by default the colleague can read AND edit/write files in the
+caller's directory (no shell). For a read-only colleague install with
+`BRIDGE_READONLY=1 ./install.sh`, or set
+`CLAUDE_CHAT_ALLOWED_TOOLS="Read Grep Glob"` on the `claude_chat` server.
+
 ## Using the two directions
 
 - **Claude → Codex:** call `mcp__codex__codex` (returns a `threadId`); continue

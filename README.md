@@ -65,10 +65,17 @@ to let Codex *talk to a reasoning Claude*, this project wraps `claude -p`
 
 ## Install
 
+> ⚠️ **Security, up front.** By default the Claude colleague can **read _and
+> edit/write_ files** in whatever directory Codex calls it from, using your
+> Claude credentials — i.e. Codex can drive file changes on your machine through
+> Claude. Install read-only with `BRIDGE_READONLY=1 ./install.sh`, or scope it
+> later via `CLAUDE_CHAT_ALLOWED_TOOLS`. There is no `Bash` access in either mode.
+
 ```bash
 git clone https://github.com/<you>/claude-codex-bridge.git
 cd claude-codex-bridge
-./install.sh
+./install.sh                    # read + write colleague (default)
+# BRIDGE_READONLY=1 ./install.sh  # read-only colleague
 ```
 
 The installer is idempotent. It:

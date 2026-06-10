@@ -14,8 +14,8 @@ Tool exposed: ask_claude(prompt, session_id?, new_session?) -> Claude's reply.
 - PROJECT GROUNDING: every call appends a system prompt telling Claude it is the
   project's persistent collaborator and to read ./collaboration.md if present.
 - POWERS: read + edit/write files (Read/Grep/Glob/Edit/Write/TodoWrite,
-  --permission-mode acceptEdits). NO shell/Bash. NO MCP servers loaded in the
-  spawned Claude (fast startup + cannot recurse back into Codex).
+  --permission-mode acceptEdits) by default. NO shell/Bash. NO MCP servers are
+  loaded in the spawned Claude (fast startup + cannot recurse back into Codex).
 
 Configuration via environment variables
 ---------------------------------------
@@ -24,7 +24,9 @@ Configuration via environment variables
                           (default: ~/.claude-codex-bridge/sessions)
 - CLAUDE_CHAT_TIMEOUT     per-call timeout in seconds (default: 900)
 - CLAUDE_CHAT_ALLOWED_TOOLS  space-separated tool allowlist
-                          (default: "Read Grep Glob Edit Write TodoWrite")
+                          (default: "Read Grep Glob Edit Write TodoWrite";
+                           set to "Read Grep Glob" for a read-only colleague)
+- CLAUDE_CHAT_DEBUG       if set to 1, include raw CLI stderr in error replies
 """
 import os
 import sys
@@ -34,7 +36,6 @@ import shutil
 import hashlib
 import subprocess
 
-CLAUDE = os.environ.get("CLAUDE_BIN") or shutil.which("claude")
 EMPTY_MCP = '{"mcpServers":{}}'
 TIMEOUT_SEC = int(os.environ.get("CLAUDE_CHAT_TIMEOUT", "900"))
 SESS_DIR = os.path.expanduser(
@@ -43,6 +44,26 @@ SESS_DIR = os.path.expanduser(
 ALLOWED_TOOLS = os.environ.get(
     "CLAUDE_CHAT_ALLOWED_TOOLS", "Read Grep Glob Edit Write TodoWrite"
 ).split()
+DEBUG = os.environ.get("CLAUDE_CHAT_DEBUG") == "1"
+
+# MCP protocol versions this server can speak. We echo the client's requested
+# version when we recognize it, else fall back to the newest we know.
+SUPPORTED_PROTOCOLS = ("2024-11-05", "2025-03-26", "2025-06-18")
+DEFAULT_PROTOCOL = "2024-11-05"
+
+
+def _resolve_claude():
+    """Return an absolute, runnable path to the claude CLI, or None."""
+    cand = os.environ.get("CLAUDE_BIN")
+    if cand:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+        found = shutil.which(cand)
+        return found  # None if a bad CLAUDE_BIN was given
+    return shutil.which("claude")
+
+
+CLAUDE = _resolve_claude()
 
 GROUNDING = (
     "You are the persistent Claude collaborator for the project in this working "
@@ -69,6 +90,10 @@ def error(mid, code, message):
     send({"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}})
 
 
+def tool_text(mid, text, is_error=False):
+    result(mid, {"content": [{"type": "text", "text": text}], "isError": is_error})
+
+
 TOOL = {
     "name": "ask_claude",
     "description": (
@@ -80,6 +105,7 @@ TOOL = {
     ),
     "inputSchema": {
         "type": "object",
+        "additionalProperties": False,
         "properties": {
             "prompt": {"type": "string", "description": "Message/question/task for Claude."},
             "session_id": {"type": "string", "description": "Optional: target a specific Claude session id instead of the project-pinned one."},
@@ -99,7 +125,8 @@ def _read_pinned(cwd):
     p = _sess_path(cwd)
     if os.path.exists(p):
         try:
-            return open(p).read().strip() or None
+            with open(p) as f:
+                return f.read().strip() or None
         except Exception:
             return None
     return None
@@ -132,7 +159,13 @@ def _run(cmd):
         data = json.loads(out)
         return data.get("result") or out, data.get("session_id", ""), (bool(data.get("is_error")) or p.returncode != 0), True
     except Exception:
-        return (out or (p.stderr or "").strip() or "no output"), "", (p.returncode != 0), False
+        if out:
+            detail = out
+        elif DEBUG:
+            detail = (p.stderr or "").strip() or "no output"
+        else:
+            detail = "Claude CLI produced no parseable output (set CLAUDE_CHAT_DEBUG=1 for details)."
+        return detail, "", (p.returncode != 0), False
 
 
 def call_claude(prompt, session_id=None, new_session=False):
@@ -160,13 +193,18 @@ def handle(msg):
     mid = msg.get("id")
     method = msg.get("method")
     if method == "initialize":
+        params = msg.get("params", {}) or {}
+        client_ver = params.get("protocolVersion")
+        ver = client_ver if client_ver in SUPPORTED_PROTOCOLS else DEFAULT_PROTOCOL
         result(mid, {
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": ver,
             "capabilities": {"tools": {}},
-            "serverInfo": {"name": "claude_chat", "version": "2.0"},
+            "serverInfo": {"name": "claude_chat", "version": "2.1"},
         })
     elif method == "notifications/initialized":
         return
+    elif method == "ping":
+        result(mid, {})
     elif method == "tools/list":
         result(mid, {"tools": [TOOL]})
     elif method == "tools/call":
@@ -175,29 +213,31 @@ def handle(msg):
             error(mid, -32602, "Unknown tool: %s" % params.get("name"))
             return
         if not CLAUDE:
-            result(mid, {"content": [{"type": "text", "text": "Error: `claude` CLI not found. Set CLAUDE_BIN or add claude to PATH."}], "isError": True})
+            tool_text(mid, "Error: `claude` CLI not found or not executable. Set CLAUDE_BIN to a valid path or add claude to PATH.", True)
             return
         args = params.get("arguments", {}) or {}
         prompt = args.get("prompt", "")
         if not prompt:
-            result(mid, {"content": [{"type": "text", "text": "Error: prompt is required."}], "isError": True})
+            tool_text(mid, "Error: prompt is required.", True)
             return
         try:
             text, sid, is_err = call_claude(prompt, args.get("session_id") or None, bool(args.get("new_session")))
             body = text if not sid else "%s\n\n[session_id: %s]" % (text, sid)
-            result(mid, {"content": [{"type": "text", "text": body}], "isError": is_err})
+            tool_text(mid, body, is_err)
         except subprocess.TimeoutExpired:
-            result(mid, {"content": [{"type": "text", "text": "Claude call timed out after %ds." % TIMEOUT_SEC}], "isError": True})
+            tool_text(mid, "Claude call timed out after %ds." % TIMEOUT_SEC, True)
         except Exception as e:
-            result(mid, {"content": [{"type": "text", "text": "Wrapper error: %s" % e}], "isError": True})
+            tool_text(mid, "Wrapper error: %s" % e, True)
     elif mid is not None:
-        error(mid, -32601, "Unknown method: %s" % method)
+        # Unknown request method: respond per JSON-RPC instead of hanging.
+        error(mid, -32601, "Method not found: %s" % method)
+    # Unknown notifications (no id) are ignored.
 
 
 def main():
-    # IMPORTANT: use readline(), NOT `for line in sys.stdin`. The latter block-
-    # buffers on a pipe (waits ~8KB before yielding a line), so a lone
-    # `initialize` message never reaches us and the MCP client hangs forever.
+    # IMPORTANT: read with readline(), NOT `for line in sys.stdin`. The latter
+    # block-buffers on a pipe (waits ~8 KB before yielding a line), so a lone
+    # `initialize` message never reaches the handler and the MCP client hangs.
     while True:
         line = sys.stdin.readline()
         if line == "":  # EOF
@@ -208,6 +248,8 @@ def main():
         try:
             msg = json.loads(line)
         except Exception:
+            # Malformed line; we can't recover an id, so skip rather than emit a
+            # spec parse-error with a null id (which most clients ignore anyway).
             continue
         handle(msg)
 
