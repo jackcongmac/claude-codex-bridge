@@ -501,6 +501,13 @@ def main():
         role_write_ok = bool(a.allow_write) and (my_role in WRITE_ROLES)
     role_tmpl = load_role_template(project, my_role)
 
+    # Slice 3: cover-budget gate BEFORE spending a model call. If coverage is
+    # already exhausted (e.g. state was manually/abnormally resumed), do NOT run
+    # the model — halt to awaiting_human.
+    if is_covering and state.get("cover_turns_used", 0) >= state.get("max_cover_turns", 1):
+        halt(project, state_p, lock_p, run_id, "cover_budget_exhausted",
+             used=state.get("cover_turns_used", 0), max=state.get("max_cover_turns", 1))
+
     changed = signal.get("changed_section", "")
     section_text = read_section(board_p, changed) if changed else ""
     envelope = {
