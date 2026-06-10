@@ -108,3 +108,44 @@ keep working unchanged until they opt in.
    separate tool/profile to avoid complicating the 2-actor happy path?
 9. Anything that lets N agents corrupt the queue/board or double-act that the
    lock+CAS+claim-TTL don't already cover.
+
+## v1 refinements (per Codex joint review — REVISE → design-first)
+
+Status note: verdict is **REVISE into a refined design, NOT implement yet.** Both
+AIs agree the direction is right but multi-agent is a deliberate v2. Hard
+constraints to fold in before any implementation:
+
+- **"Safe" = files-not-corrupted, NOT no-duplicate-execution.** With several
+  same-side agents, all may spend a model call and only one commits. The whole
+  point of the claim model is to STOP that waste up front (claim before running).
+- **Fencing token (`claim_epoch`).** Every claim/renew/commit/reclaim must check
+  `claimed_by==self && claim_epoch==seen_epoch`. A TTL-reclaimed task gets a new
+  epoch, so a late zombie agent's commit is fenced off.
+- **Lease renewal, not just `claimed_at`.** Task carries
+  `lease_expires_at` + `heartbeat_at`; a long model task renews its lease
+  periodically. TTL reclaims only a lease that EXPIRED without renewal — that's how
+  you distinguish "slow but alive" from "dead". (No heartbeat → can't tell.)
+- **Idempotency for enqueue.** Follow-up task creation needs a deterministic id /
+  `idempotency_key` so a retried commit doesn't create duplicate tasks.
+- **`agent_id` is a sanitized token** (restricted charset). Every per-agent
+  filename (`.watcher_<agent_id>.state`) must be sanitized — no path injection.
+- **depends_on gate** rejects self-deps / missing deps at creation; a detected
+  cycle → `failed`/`awaiting_human`, never an infinite claim no-op.
+- **Fairness MVP**: `priority` + FIFO (`created_at`) + `attempts`; soft cap of one
+  claim per agent per heartbeat. Round-robin later.
+- **Queue lives in its own `collaboration_queue.json`** (not in state — state is
+  the low-churn 2-actor control plane; the queue is high-churn).
+- **MVP keeps ONE global lock** (claim/commit critical sections are short → fine
+  for ~4–8 agents). Per-stream locks + multi-board sharding are **v2b**.
+- **Separate harness `_queue_turn.py`** behind `--queue-mode`; do NOT bloat
+  `_auto_turn.py` with branches. The 2-actor happy path stays untouched.
+- Output contract unchanged: model produces a task-result draft; the harness
+  commits under the lock; an agent writes only its own `## <agent_id> Outbox`.
+
+### Minimal viable slice (when/if we build it)
+1. `--queue-mode` → `_queue_turn.py`. 2. `collaboration_queue.json` + the existing
+global lock. 3. per-`agent_id` `.watcher_<agent_id>.state/session`. 4. claim one
+eligible task → run model → commit result → done/enqueue. 5. lease renewal +
+`claim_epoch` fencing. 6. priority/FIFO only — no sharding, no multi-board, no
+round-robin. This validates "N agents don't double-execute / don't clobber / don't
+burn duplicate model calls" before investing in sharding.
