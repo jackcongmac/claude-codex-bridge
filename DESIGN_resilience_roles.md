@@ -303,6 +303,44 @@ hard auto-detection → 3b. (2) coverer write = ceiling ∩ covered-role-write-c
 `next_actor=covered_actor`; coverer-suggested → awaiting_human. (5) the
 continuous-cover-turn gap is resolved by capping Slice 3 to a single cover turn.
 
+## Slice 4 spec — improver: PROPOSE-ONLY (for Codex review)
+
+The bridge suggests its own improvements, reviewed by the same loop it runs.
+Slice 4 MVP = an `improver` role that analyzes `collaboration_auto.log` for
+recurring friction and writes an improvement PROPOSAL, then routes to the peer
+(reviewer) → human. **Propose-only: it auto-applies NOTHING — not even soft
+params.** This is the purest form of "propose, never merge," and it sidesteps the
+metric-gaming risk entirely.
+
+**Deferred to Slice 4b (OUT of this slice):** auto-applying whitelisted soft
+params (+ `--allow-self-tune`) and enforcing the immutable safety floor. Those
+matter only once auto-apply exists; Slice 4 has none.
+
+In scope:
+- `improver` role + `role_templates/improver.md`.
+- When the acting agent's role is `improver`, the harness writes its reply to an
+  `## Improvement Proposals` board section (NEVER edits scripts/config/protocol —
+  exactly like the coverer writes only the Coverage Log), sets `next_actor = peer`
+  (the reviewer evaluates the proposal), `status = active`. Logged
+  `improvement_proposed`.
+- The improver is **read-only**: `improver ∉ WRITE_ROLES`, so `role_write_ok` is
+  False regardless of `--allow-write`. It analyzes and proposes; it does not edit
+  project or bridge files. The harness (not the model) writes the proposal.
+- Template instructs: read `collaboration_auto.log`, find recurring
+  halts / slow turns / repeated repairs / friction; propose ONE concrete change +
+  rationale; classify `change_type` (prompt | soft_param | protocol | script |
+  docs) so the reviewer/human sees the risk tier; do NOT apply anything.
+
+Invariants: improver never edits scripts/config/protocol (proposes only); entering
+the improver role is gated (special role via role_change approval — already
+enforced by Slice 1); all transitions are normal v4 commits; the reviewer + human
+remain the gate before any proposal becomes a change.
+
+Open questions: (1) propose-only OK for Slice 4 MVP, auto-tune → 4b? (2) proposals
+to an `## Improvement Proposals` board section (chosen, mirrors Coverage Log) vs an
+`improvements/` dir — board section simpler; agree? (3) improver strictly
+read-only — agree? (4) after a proposal, `next_actor = peer` (reviewer) — correct?
+
 Safety: retries are bounded and mechanical (re-run the identical step); they never
 touch protocol state, never spawn a second concurrent turn, and a retry that
 itself hits a fatal class halts immediately. Default behavior with
