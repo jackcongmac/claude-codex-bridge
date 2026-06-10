@@ -36,6 +36,8 @@ tool call; the Claude side keeps per-project memory and reads your shared
 
 See [`examples/review-loop.md`](examples/review-loop.md) for a copy-pasteable
 workflow that demonstrates the core review → execute → re-review loop.
+See [`examples/cookbook.md`](examples/cookbook.md) for review, test, docs, and
+shared-board handoff prompts.
 See [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
 `max-claude-pro-codex` routing strategy, and
 [`docs/role-presets.md`](docs/role-presets.md) for preset files you can apply
