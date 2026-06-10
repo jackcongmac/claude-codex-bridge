@@ -39,20 +39,25 @@ PY3="$(command -v python3)"
 
 [ -f "$STATE" ] || { echo "[x] no collaboration_state.json in $PROJECT — run scripts/init-collaboration.sh first" >&2; exit 1; }
 
-# Optionally patch budget caps into state at startup (convenience).
+# Optionally patch budget caps into state at startup (convenience). Only when the
+# loop is NOT active, so we never clobber an in-flight commit's state.
 if [ -n "$MAX_TURNS" ] || [ -n "$MAX_COST" ]; then
   MAX_TURNS="$MAX_TURNS" MAX_COST="$MAX_COST" STATE="$STATE" "$PY3" - <<'PY'
 import os, json
 p=os.environ["STATE"]; s=json.load(open(p))
-if os.environ.get("MAX_TURNS"): s["max_turns"]=int(os.environ["MAX_TURNS"])
-if os.environ.get("MAX_COST"):  s["max_cost_usd"]=float(os.environ["MAX_COST"])
-json.dump(s, open(p,"w"), ensure_ascii=False, indent=2)
+if s.get("status")=="active":
+    print("[!] loop is active — not patching budget caps (edit %s while paused)" % p)
+else:
+    if os.environ.get("MAX_TURNS"): s["max_turns"]=int(os.environ["MAX_TURNS"])
+    if os.environ.get("MAX_COST"):  s["max_cost_usd"]=float(os.environ["MAX_COST"])
+    json.dump(s, open(p,"w"), ensure_ascii=False, indent=2)
 PY
 fi
 
 run_turn() {
+  # stdout (skip reasons) + stderr both go to the log so `tail -f` shows them.
   "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
-    >/dev/null 2>>"$PROJECT/collaboration_auto.log" || true   # exit codes are advisory; harness logs
+    >>"$PROJECT/collaboration_auto.log" 2>&1 || true   # exit codes are advisory; harness logs
 }
 
 echo "[==>] watching $SIGNAL"

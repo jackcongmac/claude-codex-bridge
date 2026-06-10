@@ -239,41 +239,62 @@ def run_codex(prompt, project, allow_write, sess_path):
     # non-zero with it in testing. --ignore-user-config keeps the spawned Codex
     # fast and free of the user's MCP stack (no recursion into claude_chat).
     codex = os.environ.get("CODEX_BIN") or "codex"
-    last_f = os.path.join(tempfile.mkdtemp(), "last.json")
+    tmpd = tempfile.mkdtemp()
+    last_f = os.path.join(tmpd, "last.json")
     sandbox = "workspace-write" if allow_write else "read-only"
-    base = [codex, "exec"]
-    have_session = bool((read_json(sess_path, {}) or {}).get("codex_resumed"))
-    if have_session:
-        base += ["resume", "--last"]
-    cmd = base + [prompt, "--output-last-message", last_f, "-C", project,
-                  "--skip-git-repo-check", "--ignore-user-config", "-s", sandbox]
-    p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                       timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
-    if not os.path.exists(last_f):
-        raise RuntimeError("codex exec produced no final message (exit %s): %s"
-                           % (p.returncode, (p.stderr or "")[-200:]))
-    with open(last_f) as f:
-        draft = _extract_json(f.read())
-    st = read_json(sess_path, {}) or {}
-    st["codex_resumed"] = True
-    atomic_write_json(sess_path, st)
-    return draft, None  # codex exec cost not reliably parseable -> None (max_turns governs)
+    # NOTE: `codex exec resume` rejects the global -C/-s options in the current
+    # CLI, so resume is intentionally NOT used. Codex continuity comes from the
+    # shared board/digest it reads each turn. (Future: capture the session id and
+    # resume by id with the correct argument order.)
+    cmd = [codex, "exec", prompt, "--output-last-message", last_f, "-C", project,
+           "--skip-git-repo-check", "--ignore-user-config", "-s", sandbox]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                           timeout=int(os.environ.get("BRIDGE_TURN_TIMEOUT", "900")), cwd=project)
+        if not os.path.exists(last_f):
+            raise RuntimeError("codex exec produced no final message (exit %s): %s"
+                               % (p.returncode, (p.stderr or "")[-200:]))
+        with open(last_f) as f:
+            draft = _extract_json(f.read())
+    finally:
+        try:
+            import shutil as _sh; _sh.rmtree(tmpd, ignore_errors=True)
+        except Exception:
+            pass
+    return draft, None  # codex exec cost not reliably parseable -> None; max_turns governs the Codex side
 
 
 # ---------- the turn ----------
 
-def halt(project, state_path, lock_path, run_id, reason, **extra):
-    """Write awaiting_human under the lock (best-effort), notify, exit 20."""
-    got = acquire_lock(lock_path, run_id, ttl=0, wait=2)
-    state = read_json(state_path, {}) or {}
+def _write_failure_state(state_path, reason, extra):
+    try:
+        state = read_json(state_path, {}) or {}
+    except Exception:
+        state = {}  # tolerate a corrupt existing state — we overwrite it visibly
     state["status"] = "awaiting_human"
     state["failure"] = dict(reason=reason, at=now_str(), **extra)
-    try:
-        atomic_write_json(state_path, state)
-    finally:
-        if got:
+    atomic_write_json(state_path, state)
+
+
+def halt(project, state_path, lock_path, run_id, reason, lock_held=False, **extra):
+    """Set awaiting_human and exit 20. State is written ONLY under the lock:
+    - lock_held=True: caller already holds the lock (e.g. CAS conflict); write
+      directly then release.
+    - lock_held=False: acquire the lock first; if a live committer holds it, do
+      NOT write (never clobber an in-flight commit) — just log/notify/exit."""
+    wrote = False
+    if lock_held:
+        try:
+            _write_failure_state(state_path, reason, extra); wrote = True
+        finally:
             release_lock(lock_path)
-    log_event(project, "halted", run_id=run_id, reason=reason, **extra)
+    else:
+        if acquire_lock(lock_path, run_id, ttl=0, wait=10):
+            try:
+                _write_failure_state(state_path, reason, extra); wrote = True
+            finally:
+                release_lock(lock_path)
+    log_event(project, "halted", run_id=run_id, reason=reason, wrote_state=wrote, **extra)
     notify("Auto-loop halted: %s (awaiting human)" % reason)
     sys.exit(20)
 
@@ -298,14 +319,18 @@ def main():
     hw_p = os.path.join(project, ".watcher_%s.state" % a.side)
     sess_p = os.path.join(project, ".watcher_%s.session" % a.side)
 
-    state = read_json(state_p)
+    try:
+        state = read_json(state_p)
+        signal = read_json(signal_p)
+        hw = (read_json(hw_p, {}) or {}).get("last_processed_update_id", 0)
+    except RuntimeError as e:
+        # corrupt signal/state/high-water JSON -> halt to awaiting_human (visible),
+        # don't crash silently into the watcher's swallowed exit code.
+        halt(project, state_p, lock_p, run_id, "corrupt_json", detail=str(e)[:200])
     if state is None:
         print("no collaboration_state.json -> autonomous mode off"); sys.exit(10)
-    signal = read_json(signal_p)
     if signal is None:
         print("no signal yet"); sys.exit(10)
-
-    hw = (read_json(hw_p, {}) or {}).get("last_processed_update_id", 0)
     uid = signal.get("update_id", 0)
 
     # ---- gates ----
@@ -368,18 +393,20 @@ def main():
         halt(project, state_p, lock_p, run_id, "cost_unparseable")
 
     # ---- acquire lock and commit (CAS) ----
-    if not acquire_lock(lock_p, run_id, ttl=a.lock_ttl, wait=30):
-        log_event(project, "lock_busy", run_id=run_id); sys.exit(10)
+    # High-water was already advanced; if we can't commit we must NOT silently
+    # skip (that would lose this turn) -> halt to awaiting_human.
+    if not acquire_lock(lock_p, run_id, ttl=a.lock_ttl, wait=60):
+        halt(project, state_p, lock_p, run_id, "lock_unavailable", seen=seen)
+    cur = read_json(signal_p) or {}
+    if cur.get("update_id") != seen:
+        # CAS conflict — write failure UNDER the held lock (halt releases it).
+        halt(project, state_p, lock_p, run_id, "cas_conflict",
+             lock_held=True, seen=seen, now=cur.get("update_id"))
+    cur_state = read_json(state_p) or {}
+    if cur_state.get("status") != "active" or cur_state.get("next_actor") != self_actor:
+        release_lock(lock_p)
+        log_event(project, "authority_changed", run_id=run_id); sys.exit(10)
     try:
-        cur = read_json(signal_p) or {}
-        if cur.get("update_id") != seen:
-            release_lock(lock_p)
-            halt(project, state_p, lock_p, run_id, "cas_conflict",
-                 seen=seen, now=cur.get("update_id"))
-        cur_state = read_json(state_p) or {}
-        if cur_state.get("status") != "active" or cur_state.get("next_actor") != self_actor:
-            log_event(project, "authority_changed", run_id=run_id); sys.exit(10)
-
         new_uid = seen + 1
         append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
         cur_state.update({
@@ -399,6 +426,9 @@ def main():
             "summary": draft.get("summary", "")[:200],
         })
         atomic_write_json(hw_p, {"last_processed_update_id": new_uid})  # our own write
+    except Exception as e:
+        # board may have been appended but state/signal failed -> halt visibly
+        halt(project, state_p, lock_p, run_id, "commit_error", lock_held=True, detail=str(e)[:200])
     finally:
         release_lock(lock_p)
 
