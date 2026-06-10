@@ -63,9 +63,11 @@ def eligible(task, side, role, now):
     return False
 
 
-def pick(tasks, by_id, side, role, now):
+def pick(tasks, by_id, side, role, now, agent_id):
     cand = [t for t in tasks if eligible(t, side, role, now) and deps_done(t, by_id)]
-    cand.sort(key=lambda t: (t.get("priority", 100), t.get("created_at", "")))
+    # soft preference: a task that names me in preferred_agent sorts first.
+    cand.sort(key=lambda t: (t.get("preferred_agent") != agent_id,
+                             t.get("priority", 100), t.get("created_at", "")))
     return cand[0] if cand else None
 
 
@@ -123,11 +125,18 @@ def main():
         tasks = q.get("tasks", [])
         by_id = {t.get("id"): t for t in tasks}
         now = time.time()
-        task = pick(tasks, by_id, a.side, a.role, now)
+        # Re-check status/budget UNDER the lock (the pre-lock check was stale).
+        if ctrl.get("status") != "active":
+            print("status != active under lock"); sys.exit(10)
+        if ctrl.get("turns_used", 0) >= ctrl.get("max_turns", 50):
+            print("budget exhausted under lock"); sys.exit(10)
+        task = pick(tasks, by_id, a.side, a.role, now, agent_id)
         if task is None:
             print("no eligible task"); sys.exit(10)
         epoch = int(ctrl.get("next_epoch", 1))
         ctrl["next_epoch"] = epoch + 1
+        # RESERVE the budget at CLAIM (not commit) so parallel claims can't oversell.
+        ctrl["turns_used"] = ctrl.get("turns_used", 0) + 1
         reclaimed = (task.get("status") == "claimed")
         task.update({"status": "claimed", "claimed_by": agent_id, "claim_epoch": epoch,
                      "lease_expires_at": now + a.lease_sec,
@@ -159,7 +168,7 @@ def main():
         runner = at.run_claude if a.side == "claude" else at.run_codex
         draft, cost = runner(prompt, project, write_ok, sess_p)
     except Exception as e:
-        _fail_task(at, project, queue_p, lock_p, agent_id, task_id, seen_epoch, "agent_error", str(e)[:160])
+        _fail_task(at, project, queue_p, sig_p, lock_p, agent_id, task_id, seen_epoch, "agent_error", str(e)[:160])
 
     new_status = draft.get("status", "done")
     if new_status not in ("done", "failed", "needs_human"):
@@ -183,17 +192,21 @@ def main():
                                 "[task %s / %s] %s" % (task_id, new_status, draft.get("result_markdown", "")))
         cur.update({"status": new_status, "claimed_by": None,
                     "result_summary": (draft.get("summary", "") or "")[:200]})
-        # idempotent enqueue of follow-ups
+        # idempotent + validated enqueue of follow-ups (reject "poison" tasks whose
+        # depends_on names a non-existent id or themselves — they'd never be claimable)
         existing_ids = set(by_id.keys())
-        added = []
+        added, rejected = [], []
         for fu in (draft.get("followups") or []):
             fid = fu.get("id")
+            deps = fu.get("depends_on") or []
             if not fid or fid in existing_ids or fu.get("type") not in TASK_TYPES:
                 continue
+            if fid in deps or any((d not in existing_ids and d != fid) for d in deps):
+                rejected.append(fid); continue
             existing_ids.add(fid)
             tasks.append({"id": fid, "type": fu.get("type"), "title": fu.get("title", ""),
                           "needs_side": fu.get("needs_side"), "needs_role": fu.get("needs_role"),
-                          "status": "open", "depends_on": fu.get("depends_on") or [],
+                          "status": "open", "depends_on": deps,
                           "claimed_by": None, "claim_epoch": 0, "lease_expires_at": 0,
                           "created_at": at.now_str(), "priority": fu.get("priority", 100),
                           "attempts": 0, "idempotency_key": fid, "parent_task": task_id,
@@ -201,15 +214,19 @@ def main():
                           "target_output_agent": fu.get("target_output_agent"),
                           "preferred_agent": fu.get("preferred_agent")})
             added.append(fid)
-        ctrl = q.get("control", {}) or {}
-        ctrl["turns_used"] = ctrl.get("turns_used", 0) + 1
-        q["control"] = ctrl
+        if rejected:
+            at.log_event(project, "poison_followups_rejected", run_id=agent_id, task=task_id, rejected=rejected)
+        ctrl = q.get("control", {}) or {}     # turns_used was already reserved at CLAIM
         q["tasks"] = tasks
         at.atomic_write_json(queue_p, q)
-        # bump signal so other agents' watchers wake (claim did NOT bump -> no stampede)
-        at.atomic_write_json(sig_p, {"update_id": int(time.time()), "updated_at": at.now_str(),
+        # monotonic signal UNDER the lock (read current + 1); claim did NOT bump -> no stampede.
+        prev = int((at.read_json(sig_p, {}) or {}).get("update_id", 0))
+        at.atomic_write_json(sig_p, {"update_id": prev + 1, "updated_at": at.now_str(),
                                      "updated_by": agent_id, "changed_section": "%s Outbox" % agent_id,
                                      "summary": (draft.get("summary", "") or "")[:200]})
+    except Exception as e:   # SystemExit (the fencing exit 10) is NOT caught here
+        at.log_event(project, "queue_commit_error", run_id=agent_id, task=task_id, detail=str(e)[:200])
+        sys.exit(30)
     finally:
         at.release_lock(lock_p)
 
@@ -220,15 +237,23 @@ def main():
     sys.exit(0)
 
 
-def _fail_task(at, project, queue_p, lock_p, agent_id, task_id, seen_epoch, reason, detail):
-    """Mark a claimed task failed under the lock (epoch-fenced), then exit 20."""
+def _fail_task(at, project, queue_p, sig_p, lock_p, agent_id, task_id, seen_epoch, reason, detail):
+    """Mark a claimed task failed under the lock (epoch-fenced) + bump the signal so
+    a reviewer/human/other watcher wakes, then exit 20."""
     if at.acquire_lock(lock_p, "fail-%s" % agent_id, ttl=0, wait=10):
         try:
             q = at.read_json(queue_p) or {}
+            changed = False
             for t in q.get("tasks", []):
                 if t.get("id") == task_id and t.get("claimed_by") == agent_id and t.get("claim_epoch") == seen_epoch:
                     t.update({"status": "failed", "claimed_by": None, "result_summary": "%s: %s" % (reason, detail)})
+                    changed = True
             at.atomic_write_json(queue_p, q)
+            if changed:
+                prev = int((at.read_json(sig_p, {}) or {}).get("update_id", 0))
+                at.atomic_write_json(sig_p, {"update_id": prev + 1, "updated_at": at.now_str(),
+                                             "updated_by": agent_id, "changed_section": "queue",
+                                             "summary": "task %s failed: %s" % (task_id, reason)})
         finally:
             at.release_lock(lock_p)
     at.log_event(project, "task_failed", run_id=agent_id, task=task_id, reason=reason, detail=detail)
