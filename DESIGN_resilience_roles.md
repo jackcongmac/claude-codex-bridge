@@ -202,3 +202,38 @@ Whether assigned reviewer / executor / healer / improver / coverer: Codex still
 returns ONLY a JSON draft, never edits coordination files itself, and on any
 permission / role / state inconsistency requests `awaiting_human` rather than
 acting.
+
+## Slice 2 spec — healer: MECHANICAL retry only (for Codex review)
+
+Scope (deliberately narrow): add a **failure classification** and a **bounded,
+deterministic retry** for recoverable failures *before* falling back to the
+current halt-to-awaiting_human. **NOT in this slice:** no LLM "healer agent", no
+diagnose/propose turns, no file-repair recipes (stale-lock break, high-water
+rebuild) — those are a later slice. Nothing here ever changes `update_id`,
+`next_actor`, `turn`, `cost_so_far`, or high-water. The whole change lives inside
+a single `_auto_turn.py` run, before commit.
+
+Config: `max_repair_attempts` (default **2**), from env `BRIDGE_MAX_REPAIR`.
+
+Classification at the point of failure:
+- **Recoverable → mechanical retry of the SAME operation** (exponential backoff,
+  ≤ `max_repair_attempts`), then if still failing → halt `repair_exhausted`:
+  - model launch-level failure (process couldn't start / immediate transient OS
+    error);
+  - an explicit rate-limit signal with retry-after in the CLI output.
+- **One malformed draft → exactly ONE deterministic re-prompt** (re-run the model
+  once with a stricter "return ONLY valid JSON" instruction). Still malformed →
+  halt `repeated_malformed_drafts` (fatal).
+- **Fatal → halt immediately (unchanged from v4):** agent_timeout (a 900s timeout
+  is NOT retried — too costly), corrupt state/signal/high-water, CAS conflict,
+  update_id regression, cost_unparseable while a cost cap is active, invalid
+  (semantic) draft, permission violation, lock_unavailable (the 60s acquire wait
+  is already the retry).
+
+Logging: `repair_attempt` (n, class), `repaired` (succeeded after n), and the
+existing `halted` with reason `repair_exhausted` / `repeated_malformed_drafts`.
+
+Safety: retries are bounded and mechanical (re-run the identical step); they never
+touch protocol state, never spawn a second concurrent turn, and a retry that
+itself hits a fatal class halts immediately. Default behavior with
+`max_repair_attempts=0` is exactly today's v4 (every anomaly halts).
