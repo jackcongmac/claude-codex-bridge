@@ -1,21 +1,34 @@
 # claude-codex-bridge
 
-Bidirectional [MCP](https://modelcontextprotocol.io) bridge between
-**Claude Code** and **Codex** — so each agent can call the other as a tool, with
-the Claude side acting as a **persistent, project-aware colleague** rather than a
-fresh stateless instance on every call.
+> Let **Claude Code** and **Codex** call each other as tools — and make the Claude
+> side a **persistent, project-aware colleague**, not a fresh stateless instance
+> every call.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP](https://img.shields.io/badge/protocol-MCP-7c4dff.svg)](https://modelcontextprotocol.io)
+[![Claude Code](https://img.shields.io/badge/Claude%20Code-CLI-d97757.svg)](https://docs.claude.com/claude-code)
+[![Codex](https://img.shields.io/badge/Codex-CLI-10a37f.svg)](https://developers.openai.com/codex)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555.svg)
+![Python](https://img.shields.io/badge/python-3.x%20stdlib-3776ab.svg)
+
+A small, dependency-free bridge over the [Model Context
+Protocol](https://modelcontextprotocol.io). Each agent reaches the other with one
+tool call; the Claude side keeps per-project memory and reads your shared
+`collaboration.md` so the two agents actually work *together*.
 
 ```
-              ┌──────────────────────────────────────────────┐
-              │                                              │
-   Claude Code ──► mcp__codex__codex ──► codex mcp-server ──► Codex
-   (you)                                                       │
-     ▲                                                         │
-     │                                                         ▼
-   ask_claude wrapper ◄── mcp__claude_chat__ask_claude ◄────── Codex
-     │  (claude -p, persistent per-project session)
-     ▼
-   a Claude colleague that remembers + reads collaboration.md
+   ┌──────────────┐   mcp__codex__codex          ┌──────────────┐
+   │  Claude Code │ ───────────────────────────► │    Codex     │
+   │    (you)     │      codex mcp-server         │              │
+   │              │ ◄─────────────────────────── │              │
+   └──────────────┘   mcp__claude_chat__ask_claude└──────────────┘
+                                │
+                                ▼
+                  claude_chat_mcp.py  (claude -p)
+                                │
+                                ▼
+            a Claude colleague that REMEMBERS (per-project session)
+            and reads ./collaboration.md before answering
 ```
 
 | Direction | Tool the caller uses | What runs under the hood |
