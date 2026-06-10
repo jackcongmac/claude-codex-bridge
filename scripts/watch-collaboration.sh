@@ -18,6 +18,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SIDE=""; PROJECT="$PWD"; ALLOW_WRITE=""; LOCK_TTL="600"
 MAX_TURNS=""; MAX_COST=""; POLL_INTERVAL="${BRIDGE_POLL_INTERVAL:-2}"
+QUEUE_MODE=""; AGENT_ID=""; ROLE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,6 +28,9 @@ while [ $# -gt 0 ]; do
     --max-turns) MAX_TURNS="$2"; shift 2;;
     --max-cost) MAX_COST="$2"; shift 2;;
     --lock-ttl) LOCK_TTL="$2"; shift 2;;
+    --queue-mode) QUEUE_MODE="1"; shift;;
+    --agent-id) AGENT_ID="$2"; shift 2;;
+    --role) ROLE="$2"; shift 2;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -37,11 +41,17 @@ SIGNAL="$PROJECT/collaboration_signal.json"
 STATE="$PROJECT/collaboration_state.json"
 PY3="$(command -v python3)"
 
-[ -f "$STATE" ] || { echo "[x] no collaboration_state.json in $PROJECT — run scripts/init-collaboration.sh first" >&2; exit 1; }
+if [ -n "$QUEUE_MODE" ]; then
+  [ -n "$AGENT_ID" ] || { echo "[x] --queue-mode requires --agent-id <id>" >&2; exit 2; }
+  [ -f "$PROJECT/collaboration_queue.json" ] || { echo "[x] no collaboration_queue.json — seed it (templates/collaboration_queue.json)" >&2; exit 1; }
+else
+  [ -f "$STATE" ] || { echo "[x] no collaboration_state.json in $PROJECT — run scripts/init-collaboration.sh first" >&2; exit 1; }
+fi
 
 # Optionally patch budget caps into state at startup (convenience). Only when the
-# loop is NOT active, so we never clobber an in-flight commit's state.
-if [ -n "$MAX_TURNS" ] || [ -n "$MAX_COST" ]; then
+# loop is NOT active, so we never clobber an in-flight commit's state. (2-actor
+# mode only; in --queue-mode the budget lives in collaboration_queue.json control.)
+if [ -z "$QUEUE_MODE" ] && { [ -n "$MAX_TURNS" ] || [ -n "$MAX_COST" ]; }; then
   MAX_TURNS="$MAX_TURNS" MAX_COST="$MAX_COST" STATE="$STATE" "$PY3" - <<'PY'
 import os, json
 p=os.environ["STATE"]; s=json.load(open(p))
@@ -56,8 +66,14 @@ fi
 
 run_turn() {
   # stdout (skip reasons) + stderr both go to the log so `tail -f` shows them.
-  "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
-    >>"$PROJECT/collaboration_auto.log" 2>&1 || true   # exit codes are advisory; harness logs
+  if [ -n "$QUEUE_MODE" ]; then
+    "$PY3" "$HERE/_queue_turn.py" --as "$SIDE" --agent-id "$AGENT_ID" ${ROLE:+--role "$ROLE"} \
+      --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
+      >>"$PROJECT/collaboration_auto.log" 2>&1 || true
+  else
+    "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
+      >>"$PROJECT/collaboration_auto.log" 2>&1 || true   # exit codes are advisory; harness logs
+  fi
 }
 
 echo "[==>] watching $SIGNAL"
@@ -71,7 +87,7 @@ run_turn
 # covers automatically; it just logs `peer_stale_candidate` + notifies so a human
 # can open coverage (Slice 3) if the peer's active turn has gone silent too long.
 HEARTBEAT_INTERVAL="${BRIDGE_HEARTBEAT_INTERVAL:-60}"
-if [ "${HEARTBEAT_INTERVAL:-0}" -gt 0 ] 2>/dev/null; then
+if [ -z "$QUEUE_MODE" ] && [ "${HEARTBEAT_INTERVAL:-0}" -gt 0 ] 2>/dev/null; then
   ( while true; do
       sleep "$HEARTBEAT_INTERVAL"
       "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --heartbeat \
