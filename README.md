@@ -14,14 +14,16 @@
 Windows is not yet verified; see
 [`docs/windows-support.md`](docs/windows-support.md) for compatibility notes.
 
-**Claude Code ↔ Codex, wired together through MCP.**
+**Claude Code ↔ Codex, wired together through MCP and a durable shared board.**
 
 This project was built with the same Claude + Codex collaboration workflow it
 enables: one agent asks the other for review, execution, and second opinions,
 while both coordinate through project-local shared files.
 
-It is also a place to make asymmetric agent resources useful: route work by
-agent strengths and subscription constraints, not by round-robin turns.
+It is a collaboration framework for asymmetric agents: MCP is the transport,
+`collaboration.md` is the shared memory, `collaboration_signal.json` is the cheap
+change detector, and resource profiles keep quota, context, billing, and write
+authority visible.
 
 ![Terminal demo: Codex asks Claude for review, applies the change, then asks Claude to re-review with memory of the previous turn.](docs/assets/claude-codex-bridge-demo.gif)
 
@@ -38,13 +40,17 @@ tool call; the Claude side keeps per-project memory and reads your shared
 - Coordinate two agents through `collaboration.md` and a low-token signal file.
 - Route Claude Max / Codex Pro style workflows by scarce reasoning vs. bounded execution.
 - Run an event-driven collaboration loop with explicit caps and safety checks.
+- Promote real reviewer/executor loops that converge to `status=done` without a
+  human manually poking every turn.
 
 See [`examples/review-loop.md`](examples/review-loop.md) for a copy-pasteable
 workflow that demonstrates the core review → execute → re-review loop.
+See [`examples/autonomous-review-loop.md`](examples/autonomous-review-loop.md)
+for a real bounded autonomous review loop driven by the harness.
 See [`examples/cookbook.md`](examples/cookbook.md) for review, test, docs, and
 shared-board handoff prompts.
 See [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
-`max-claude-pro-codex` routing strategy, and
+full subscription, billing, context, and permission routing matrix, and
 [`docs/role-presets.md`](docs/role-presets.md) for preset files you can apply
 to `collaboration_state.json`.
 

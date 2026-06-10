@@ -35,6 +35,16 @@ class CookbookExampleTests(unittest.TestCase):
 
         self.assertIn("examples/cookbook.md", readme)
 
+    def test_autonomous_review_loop_example_is_linked_from_readme(self):
+        example = ROOT / "examples" / "autonomous-review-loop.md"
+        text = example.read_text()
+        readme = (ROOT / "README.md").read_text()
+
+        self.assertIn("Real Autonomous Review Loop", text)
+        self.assertIn("status=done", text)
+        self.assertIn("collaboration_auto.log", text)
+        self.assertIn("examples/autonomous-review-loop.md", readme)
+
 
 if __name__ == "__main__":
     unittest.main()

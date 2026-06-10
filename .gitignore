@@ -13,3 +13,16 @@ config.toml
 *.swp
 __pycache__/
 *.pyc
+
+# Per-project runtime board instances (created by init-collaboration.sh) — NOT repo content
+collaboration.md
+collaboration_signal.json
+collaboration_state.json
+collaboration_queue.json
+collaboration_auto.log
+collaboration_archive/
+.watcher_*.state
+.watcher_*.session
+.qagent_*.session
+.heartbeat_*.state
+collaboration.lock

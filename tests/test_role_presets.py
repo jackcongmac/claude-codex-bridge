@@ -24,7 +24,9 @@ class RolePresetTests(unittest.TestCase):
             "resource_profiles",
             "routing_rules",
         }
-        preset_files = sorted(PRESETS.glob("*.json"))
+        preset_files = sorted(
+            path for path in PRESETS.glob("*.json") if not path.name.startswith("._")
+        )
 
         self.assertGreaterEqual(len(preset_files), 2)
         for path in preset_files:
