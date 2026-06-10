@@ -37,12 +37,27 @@ caller's directory (no shell). For a read-only colleague install with
   is auto-pinned per working directory — no need to pass `session_id`. Pass
   `new_session: true` to reset, or `session_id` to target a specific session.
 
-## Recommended collaboration pattern
+## Recommended collaboration pattern (coordination layer)
 
-Keep a shared `collaboration.md` board in the project root. Each agent reads it
-before acting and writes durable findings back to it. The MCP calls are the
-"poke the other agent to take a turn" channel; `collaboration.md` is the durable
-shared memory. The Claude colleague is told to consult it automatically.
+The MCP servers are the transport; the coordination layer is what makes the two
+agents collaborate. Drop the templates into a project:
+
+```bash
+scripts/init-collaboration.sh            # into current dir (idempotent)
+```
+
+This creates `collaboration.md` (shared board: roles, outboxes, file locks,
+decision log) and `collaboration_signal.json` (low-token change signal).
+
+The loop:
+1. Each agent reads `collaboration_signal.json` first; re-reads `collaboration.md`
+   only when `update_id` changed.
+2. Each writes status/findings to its own outbox in `collaboration.md`, then bumps
+   `collaboration_signal.json` (`update_id` + one-line `summary`).
+3. Use the MCP bridge (`mcp__codex__codex` / `mcp__claude_chat__ask_claude`) to
+   poke the other agent to take a turn.
+
+The Claude colleague is already told to read `collaboration.md` automatically.
 
 ## Troubleshooting
 

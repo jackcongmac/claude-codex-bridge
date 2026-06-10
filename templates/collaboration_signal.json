@@ -1,0 +1,8 @@
+{
+  "update_id": 0,
+  "updated_at": "YYYY-MM-DD HH:MM:SS TZ",
+  "updated_by": "Codex | Claude | <human>",
+  "changed_file": "collaboration.md",
+  "changed_section": "Codex Outbox | Claude Outbox | Decision Log | Open Questions | File Locks",
+  "summary": "One-line, human-readable description of what changed. Bump update_id every time."
+}

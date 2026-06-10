@@ -123,6 +123,39 @@ call mcp__codex__codex with prompt:
 Both directions are **global** after install — every project gets them, no
 per-project setup.
 
+## Coordination layer (the part that makes them *collaborate*)
+
+The two MCP servers are the **transport** — the "phone line." They let each agent
+call the other, but a phone line alone isn't teamwork. The coordination layer is
+a simple, durable convention that turns two agents into colleagues:
+
+- **`collaboration.md`** — a shared board in your project root: roles, operating
+  rules, each agent's outbox, file locks, open questions, a decision log. Both
+  agents read it before acting and write findings back to it. It's the **shared
+  memory**; the `ask_claude` colleague is already told to read it automatically.
+- **`collaboration_signal.json`** — a tiny **low-token signal file**. Instead of
+  re-reading the whole board on every poll, an agent reads this first and only
+  re-reads `collaboration.md` when `update_id` changes. Cheap polling.
+
+Drop both into a project (idempotent, never overwrites existing files):
+
+```bash
+scripts/init-collaboration.sh           # into the current directory
+scripts/init-collaboration.sh /path/to/project
+```
+
+The loop:
+
+1. Each agent reads `collaboration_signal.json`; re-reads `collaboration.md` only
+   when `update_id` changed.
+2. Each writes status / findings to **its own outbox** in `collaboration.md`,
+   then bumps `collaboration_signal.json` (`update_id` + one-line `summary`).
+3. Use the MCP bridge to **poke the other agent to take a turn**.
+
+> Transport (global, installed once) vs. coordination (per-project files you drop
+> in). The bridge gives you both halves; the board is what makes a review →
+> execute → re-review loop actually work.
+
 ## Configuration (env vars on the Codex `claude_chat` server)
 
 | Variable | Default | Purpose |
