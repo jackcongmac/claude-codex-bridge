@@ -55,10 +55,21 @@ acquire || exit 1
 trap release EXIT
 echo "[==>] push lock acquired by '$WHO' on branch '$BRANCH'"
 
-if ! git pull --rebase origin "$BRANCH"; then
-  echo "[x] pull --rebase hit a conflict — resolve it, then re-run bridge-push.sh." >&2
-  echo "    (likely both agents edited the same file — see lane discipline in the protocol doc.)" >&2
-  exit 2   # trap releases the lock; rebase left for you to resolve
-fi
+git fetch -q origin "$BRANCH"
+# Rebase non-interactively, dropping now-empty/duplicate commits. Only a REAL
+# conflict (unmerged files) is a failure; a benign pause is auto-continued.
+GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true git -c rebase.autoStash=true \
+  rebase --empty=drop "origin/$BRANCH" >/dev/null 2>&1 || true
+tries=0
+while [ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" ] || \
+      [ -d "$(git rev-parse --git-path rebase-apply 2>/dev/null)" ]; do
+  if git diff --name-only --diff-filter=U | grep -q .; then
+    echo "[x] real conflict — both agents edited the same file." >&2
+    echo "    Resolve it, then re-run bridge-push.sh. (lane discipline: docs/agent-collaboration-protocol.md)" >&2
+    exit 2   # trap releases the lock; rebase left for you to resolve
+  fi
+  tries=$(( tries + 1 )); [ "$tries" -gt 50 ] && { echo "[x] rebase stuck; resolve manually." >&2; exit 3; }
+  GIT_EDITOR=true git rebase --continue >/dev/null 2>&1 || git rebase --skip >/dev/null 2>&1 || break
+done
 git push origin "$BRANCH"
 echo "[ok] pushed '$BRANCH'. Lock released."
