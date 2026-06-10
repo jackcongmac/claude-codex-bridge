@@ -54,7 +54,8 @@ def rotate(text, keep, protected):
             sec.append(lines[j]); j += 1
         i = j
         # Only rotate log-like sections that are NOT the pending (protected) one.
-        if not (is_log_header(header) and (not protected or protected.strip() not in header)):
+        sect_name = header[3:].strip()
+        if not (is_log_header(header) and sect_name != (protected or "").strip()):
             result.append(header); result.extend(sec); continue
         # Split the section body into a preamble + '### ' entries.
         pre, entries, cur = [], [], None
@@ -105,19 +106,24 @@ def main():
     try:
         sig = at.read_json(signal_p, {}) or {}
         protected = sig.get("changed_section", "")   # don't archive the pending section
+        keep = max(1, a.keep)                          # keep >= 1 (avoid the -0 slice footgun)
         text = open(board_p).read()
-        new_board, archived_text, count = rotate(text, a.keep, protected)
+        new_board, archived_text, count = rotate(text, keep, protected)
         if count == 0:
             print("nothing old enough to archive"); sys.exit(0)
         os.makedirs(archive_dir, exist_ok=True)
         ar_p = os.path.join(archive_dir, "collaboration_%s.md" % time.strftime("%Y-%m"))
-        header = ("" if os.path.exists(ar_p) else "# Collaboration archive\n")
-        with open(ar_p, "a") as f:
-            f.write(header + "\n<!-- archived %s (kept last %d per section) -->\n" % (time.strftime("%Y-%m-%d %H:%M:%S %Z"), a.keep) + archived_text + "\n")
+        # Write the archive ATOMICALLY and BEFORE shrinking the board: a crash in
+        # between can only DUPLICATE an archive (the board is still intact), never
+        # lose content. This preserves the lossless invariant.
+        existing = open(ar_p).read() if os.path.exists(ar_p) else "# Collaboration archive\n"
+        block = "\n<!-- archived %s (kept last %d per section) -->\n%s\n" % (
+            time.strftime("%Y-%m-%d %H:%M:%S %Z"), keep, archived_text)
+        at.atomic_write(ar_p, existing + block)
         at.atomic_write(board_p, new_board)
         # IMPORTANT: do NOT bump collaboration_signal.json — this is maintenance.
         at.log_event(project, "board_compacted", run_id="compact",
-                     archived_entries=count, kept=a.keep,
+                     archived_entries=count, kept=keep,
                      before_bytes=size, after_bytes=len(new_board))
         print("archived %d entries -> %s (board %d -> %d bytes)" % (count, ar_p, size, len(new_board)))
     finally:
