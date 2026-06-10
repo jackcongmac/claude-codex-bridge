@@ -320,9 +320,11 @@ In scope:
 - `improver` role + `role_templates/improver.md`.
 - When the acting agent's role is `improver`, the harness writes its reply to an
   `## Improvement Proposals` board section (NEVER edits scripts/config/protocol —
-  exactly like the coverer writes only the Coverage Log), sets `next_actor = peer`
-  (the reviewer evaluates the proposal), `status = active`. Logged
-  `improvement_proposed`.
+  exactly like the coverer writes only the Coverage Log). Routing **requires a
+  reviewer**: if `roles[peer] == "reviewer"`, set `next_actor = peer`,
+  `status = active` (the reviewer evaluates); otherwise set
+  `status = awaiting_human`, `next_actor = human`, reason `reviewer_required` —
+  never hand a proposal to a non-reviewer peer. Logged `improvement_proposed`.
 - The improver is **read-only**: `improver ∉ WRITE_ROLES`, so `role_write_ok` is
   False regardless of `--allow-write`. It analyzes and proposes; it does not edit
   project or bridge files. The harness (not the model) writes the proposal.
@@ -339,9 +341,16 @@ remain the gate before any proposal becomes a change.
 Open questions: (1) propose-only OK for Slice 4 MVP, auto-tune → 4b? (2) proposals
 to an `## Improvement Proposals` board section (chosen, mirrors Coverage Log) vs an
 `improvements/` dir — board section simpler; agree? (3) improver strictly
-read-only — agree? (4) after a proposal, `next_actor = peer` (reviewer) — correct?
+read-only — agree? (4) after a proposal, route to `peer` only if `roles[peer]`
+is `reviewer`, else to `human` (resolved per Codex review).
 
-Safety: retries are bounded and mechanical (re-run the identical step); they never
-touch protocol state, never spawn a second concurrent turn, and a retry that
-itself hits a fatal class halts immediately. Default behavior with
-`max_repair_attempts=0` is exactly today's v4 (every anomaly halts).
+Resolved (per Codex review): propose-only MVP with auto-tune → 4b; proposals to an
+`## Improvement Proposals` board section; improver strictly read-only
+(harness-enforced); reviewer-required routing (above); proposal commit is a normal
+v4 commit (global lock, CAS, board/state/signal-last, `update_id+1`) exactly like
+the coverer.
+
+> (Slice 2 healer recap — belongs to the Slice 2 spec above, not Slice 4): retries
+> are bounded and mechanical (re-run the identical step); they never touch protocol
+> state, never spawn a second concurrent turn, and a retry that itself hits a fatal
+> class halts immediately. `max_repair_attempts=0` is exactly today's v4.

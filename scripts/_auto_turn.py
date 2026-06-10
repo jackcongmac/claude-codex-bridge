@@ -650,6 +650,21 @@ def main():
             sig_section = "%s Outbox" % self_actor
             log_event(project, "handoff", run_id=run_id, actor=self_actor, to=peer,
                       reason=handoff_req.get("reason"))
+        elif my_role == "improver":
+            # IMPROVER (Slice 4, propose-only): write the proposal to the
+            # Improvement Proposals section (NEVER edits scripts/config/protocol).
+            # Route to the peer ONLY if the peer is a reviewer; else to a human.
+            _append_under_header(board_p, "## Improvement Proposals", draft.get("reply_markdown", ""))
+            peer = OTHER[self_actor]
+            cur_state.update(common)
+            if (cur_state.get("roles") or {}).get(peer) == "reviewer":
+                cur_state.update({"next_actor": peer, "status": "active", "failure": None})
+            else:
+                cur_state.update({"next_actor": "human", "status": "awaiting_human",
+                                  "failure": {"reason": "reviewer_required", "at": now_str()}})
+            sig_section = "Improvement Proposals"
+            log_event(project, "improvement_proposed", run_id=run_id, actor=self_actor,
+                      routed_to=cur_state["next_actor"])
         else:
             # NORMAL turn.
             append_to_outbox(board_p, self_actor, draft.get("reply_markdown", ""))
