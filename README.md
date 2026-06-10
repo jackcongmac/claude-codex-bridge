@@ -11,6 +11,9 @@
 ![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-555.svg)
 ![Python](https://img.shields.io/badge/python-3.x%20stdlib-3776ab.svg)
 
+Windows is not yet verified; see
+[`docs/windows-support.md`](docs/windows-support.md) for compatibility notes.
+
 **Claude Code ↔ Codex, wired together through MCP.**
 
 This project was built with the same Claude + Codex collaboration workflow it
