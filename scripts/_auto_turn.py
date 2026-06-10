@@ -589,13 +589,16 @@ def main():
     verdict = draft.get("verdict")
     if my_role == "reviewer" and verdict not in REVIEWER_VERDICTS:
         halt(project, state_p, lock_p, run_id, "invalid_draft", role="reviewer", verdict=str(verdict))
+    # An improver is proposal-only: it never changes roles, hands off, or covers,
+    # so those intents are ignored for an improver turn (Slice 4 purity).
+    improving = (my_role == "improver")
     # classify any role_change request now; it is APPLIED under the lock below
     role_req = draft.get("role_change")
-    role_decision = classify_role_change(self_actor, role_req, roles) if role_req else None
+    role_decision = classify_role_change(self_actor, role_req, roles) if (role_req and not improving) else None
     # Slice 3 coverage intents (resolved under the lock below)
     handoff_req = draft.get("handoff") if isinstance(draft.get("handoff"), dict) else None
-    handback_req = bool(draft.get("handback")) and is_covering
-    opening_handoff = bool(handoff_req) and not is_covering   # you hand off your OWN turn
+    handback_req = bool(draft.get("handback")) and is_covering and not improving
+    opening_handoff = bool(handoff_req) and not is_covering and not improving  # hand off your OWN turn
 
     # ---- acquire lock and commit (CAS) ----
     # High-water was already advanced; if we can't commit we must NOT silently
