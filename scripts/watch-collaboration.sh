@@ -67,6 +67,21 @@ echo "      tail -f \"$PROJECT/collaboration_auto.log\" to watch the conversatio
 # Run once at startup in case a turn is already pending for this side.
 run_turn
 
+# Slice 3b-min: background heartbeat — OBSERVE-ONLY stale-peer detection. It never
+# covers automatically; it just logs `peer_stale_candidate` + notifies so a human
+# can open coverage (Slice 3) if the peer's active turn has gone silent too long.
+HEARTBEAT_INTERVAL="${BRIDGE_HEARTBEAT_INTERVAL:-60}"
+if [ "${HEARTBEAT_INTERVAL:-0}" -gt 0 ] 2>/dev/null; then
+  ( while true; do
+      sleep "$HEARTBEAT_INTERVAL"
+      "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --heartbeat \
+        >>"$PROJECT/collaboration_auto.log" 2>&1 || true
+    done ) &
+  HB_PID=$!
+  trap 'kill "$HB_PID" 2>/dev/null' EXIT
+  echo "[==>] heartbeat every ${HEARTBEAT_INTERVAL}s (observe-only; notifies if the peer's active turn is stale > ${BRIDGE_STALE_SEC:-300}s)"
+fi
+
 if command -v fswatch >/dev/null 2>&1; then
   echo "[==>] using fswatch"
   # -l latency debounces bursts; each event triggers one turn (harness dedupes).

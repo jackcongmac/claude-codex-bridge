@@ -429,6 +429,8 @@ def main():
     ap.add_argument("--allow-write", action="store_true")
     ap.add_argument("--lock-ttl", type=int, default=600)
     ap.add_argument("--run-id", default=None)
+    ap.add_argument("--heartbeat", action="store_true",
+                    help="observe-only: detect a stale peer turn, log + notify, never write.")
     a = ap.parse_args()
 
     project = os.path.abspath(a.project)
@@ -441,6 +443,33 @@ def main():
     lock_p = os.path.join(project, "collaboration.lock")
     hw_p = os.path.join(project, ".watcher_%s.state" % a.side)
     sess_p = os.path.join(project, ".watcher_%s.session" % a.side)
+
+    if a.heartbeat:
+        # Slice 3b-min: OBSERVE-ONLY. Detect a stale peer turn and notify a human;
+        # never auto-cover, never write board/state/signal/high-water. A human who
+        # sees the notice can open coverage manually (Slice 3).
+        st = read_json(state_p, {}) or {}
+        sig = read_json(signal_p, {}) or {}
+        peer = OTHER[self_actor]
+        if st.get("status") != "active" or st.get("next_actor") != peer:
+            sys.exit(0)   # nothing to watch: not the peer's active turn
+        try:
+            age = time.time() - os.path.getmtime(signal_p)
+        except OSError:
+            sys.exit(0)
+        if age < int(os.environ.get("BRIDGE_STALE_SEC", "300")):
+            sys.exit(0)
+        # de-dupe: notify at most once per stuck update_id
+        hb_p = os.path.join(project, ".heartbeat_%s.state" % a.side)
+        uid = sig.get("update_id")
+        if (read_json(hb_p, {}) or {}).get("notified_update_id") == uid:
+            sys.exit(0)
+        atomic_write_json(hb_p, {"notified_update_id": uid})
+        log_event(project, "peer_stale_candidate", run_id="heartbeat",
+                  peer=peer, age_sec=int(age), update_id=uid)
+        notify("%s may be stuck (~%ds, it is %s's active turn). Open coverage manually if needed."
+               % (peer, int(age), peer))
+        sys.exit(0)
 
     try:
         state = read_json(state_p)
