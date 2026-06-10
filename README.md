@@ -37,7 +37,9 @@ tool call; the Claude side keeps per-project memory and reads your shared
 See [`examples/review-loop.md`](examples/review-loop.md) for a copy-pasteable
 workflow that demonstrates the core review → execute → re-review loop.
 See [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
-`max-claude-pro-codex` routing preset.
+`max-claude-pro-codex` routing strategy, and
+[`docs/role-presets.md`](docs/role-presets.md) for preset files you can apply
+to `collaboration_state.json`.
 
 ```
    ┌──────────────┐   mcp__codex__codex          ┌──────────────┐
@@ -238,6 +240,17 @@ include `resource_profiles` for a `max-claude-pro-codex` style split:
 profiles, turn caps, cost cap, last signal, recent events, and halt reason. See
 [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
 routing rules.
+
+Apply an opinionated role preset when you want the state file to reflect that
+split explicitly:
+
+```bash
+scripts/apply-role-preset.py --project . --preset max-claude-pro-codex
+scripts/apply-role-preset.py --project . --preset reviewer-implementer
+```
+
+Presets reuse the existing `roles` and `resource_profiles` fields; they do not
+grant extra write permissions. See [`docs/role-presets.md`](docs/role-presets.md).
 
 ## Configuration (env vars on the Codex `claude_chat` server)
 
