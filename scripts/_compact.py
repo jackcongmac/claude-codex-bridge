@@ -16,7 +16,6 @@ Usage: scripts/compact-collaboration.sh [project]  (preferred)
        _compact.py --project DIR [--keep K] [--force]
 """
 import os
-import re
 import sys
 import time
 import argparse

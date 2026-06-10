@@ -38,7 +38,7 @@ KNOWN_ROLES = {"peer", "planner", "executor", "reviewer", "healer", "improver", 
 # privilege ordering for monotonic role_change gating (higher = more power)
 ROLE_PRIV = {"reviewer": 0, "planner": 0, "peer": 1, "executor": 2,
              "healer": 3, "improver": 3, "coverer": 3}
-SPECIAL_ROLES = {"healer", "improver", "coverer"}   # behavior NOT implemented in Slice 1
+SPECIAL_ROLES = {"healer", "improver", "coverer"}   # gated roles; coverer/improver implemented, healer is mechanical-retry not a role
 WRITE_ROLES = {"peer", "executor"}                  # roles that MAY use write tools (if the watcher allows)
 REVIEWER_VERDICTS = {"GO", "NO-GO", "REVISE", None}
 DEFAULT_ROLE = "peer"
@@ -131,7 +131,8 @@ def acquire_lock(lock_path, run_id, ttl, wait=0):
         except FileExistsError:
             # maybe stale?
             try:
-                info = json.load(open(lock_path))
+                with open(lock_path) as _lf:
+                    info = json.load(_lf)
                 age = time.time() - float(info.get("acquired_at", 0))
                 holder = int(info.get("pid", -1))
                 if age > ttl and not _pid_alive(holder):
@@ -614,6 +615,11 @@ def main():
              next_actor=str(nxt), status=str(st_new))
     if mc is not None and cost is None and a.side == "claude":
         halt(project, state_p, lock_p, run_id, "cost_unparseable")
+    if mc is not None and cost is None and a.side == "codex":
+        # `codex exec` cost is not parseable, so max_cost_usd can NOT be enforced
+        # on the Codex side — the Codex side is bounded only by max_turns. Surface
+        # this loudly so a user who set max_cost isn't lulled into a false ceiling.
+        log_event(project, "cost_untracked", run_id=run_id, side="codex", max_cost=mc)
     # role-specific output contract (Slice 1): reviewer may carry a verdict
     verdict = draft.get("verdict")
     if my_role == "reviewer" and verdict not in REVIEWER_VERDICTS:
