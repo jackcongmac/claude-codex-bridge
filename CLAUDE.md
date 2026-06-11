@@ -24,6 +24,11 @@ background** so you react to peer updates the moment they happen.
    (GO/REVISE · SHIP/FIX-FIRST) → human approves direction.
 5. **Coordinate releases on the board** — check `gh release list` before cutting a
    version so numbers don't drift (this exact drift already happened once).
+6. **Narrate before slow/opaque actions** — both agents. Before a peer call
+   (`mcp__codex__codex` / `ask_claude`) or any long step the user can't watch,
+   say in one line WHAT you're about to do and ROUGHLY how long, and what a normal
+   wait looks like. A predictable heads-up before each opaque step is how the two
+   agents earn the user's trust; an un-narrated slow action reads as "stuck."
 
 If you are a brand-new window and unsure of state: run Step 0, read the board's
 `## Participants` and latest `## *Outbox*` entries, then announce yourself.
