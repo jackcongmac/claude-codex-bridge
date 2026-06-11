@@ -40,19 +40,25 @@ SIGNAL="$BRIDGE_COLLAB/collaboration_signal.json"
 PY3="$(command -v python3)"
 [ -f "$SIGNAL" ] || { echo "[x] no $SIGNAL — run init-collaboration.sh first" >&2; exit 1; }
 
-# Single-armer mutex per (project, self): a stale/duplicate armer running the
-# presence scan with an out-of-date view is the main source of false-departure
-# noise. If a live armer for this self already exists, don't start a duplicate.
-PIDFILE="$BRIDGE_COLLAB/.boardwait_${SELF}.pid"
-if [ -f "$PIDFILE" ]; then
+# Single-armer mutex per (project, self): duplicate armers running the presence
+# scan with out-of-date views are the main source of false-departure noise. Claim
+# atomically (noclobber) so two near-simultaneous starts can't both win; break a
+# stale claim only if its pid is dead; clean up only if the pidfile is still ours.
+SAFE_SELF="$(printf '%s' "$SELF" | tr -c 'A-Za-z0-9_.-' '_')"
+PIDFILE="$BRIDGE_COLLAB/.boardwait_${SAFE_SELF}.pid"
+while true; do
+  if ( set -o noclobber; printf '%s\n' "$$" > "$PIDFILE" ) 2>/dev/null; then
+    break
+  fi
   OLDPID="$(cat "$PIDFILE" 2>/dev/null || echo "")"
   if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
     echo "[!] a board-wait for '$SELF' is already armed (pid $OLDPID) in $BRIDGE_COLLAB — not starting a duplicate." >&2
     exit 0
   fi
-fi
-echo $$ > "$PIDFILE"
-trap 'rm -f "$PIDFILE"' EXIT
+  rm -f "$PIDFILE"   # stale (holder dead) — retry the atomic claim
+done
+cleanup_pidfile() { [ "$(cat "$PIDFILE" 2>/dev/null || echo "")" = "$$" ] && rm -f "$PIDFILE"; }
+trap cleanup_pidfile EXIT
 
 field() { _S="$SIGNAL" _K="$1" "$PY3" -c "import json,os;print(json.load(open(os.environ['_S'])).get(os.environ['_K'],''))" 2>/dev/null || echo ""; }
 
