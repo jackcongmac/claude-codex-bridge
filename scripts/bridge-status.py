@@ -12,9 +12,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bridge_common as bc  # find_project_root + collab_paths (single source of truth)
 
 
-STATE_FILE = "collaboration_state.json"
-SIGNAL_FILE = "collaboration_signal.json"
-LOG_FILE = "collaboration_auto.log"
 RECENT_EVENT_COUNT = 5
 
 
@@ -136,7 +133,7 @@ def build_dashboard(project):
     state = state or {}
     lines = [
         "Bridge Status",
-        f"Project: {project}",
+        f"Project: {root}  (.collab: {paths['dir']})",
         f"Status: {format_value(state.get('status', 'unavailable'))}",
         f"Turn: {format_turn(state)}",
         f"Next actor: {format_value(state.get('next_actor'))}",
