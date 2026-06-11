@@ -4,7 +4,11 @@
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bridge_common as bc  # find_project_root + collab_paths (single source of truth)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,7 +71,7 @@ def validate_preset(preset):
         validate_resource_profiles(preset["resource_profiles"])
 
 
-def validate_apply_is_safe(project, state, force):
+def validate_apply_is_safe(lock_path, state, force):
     if force:
         return
     if state.get("status") == "active":
@@ -75,7 +79,6 @@ def validate_apply_is_safe(project, state, force):
             "refusing to apply preset while collaboration_state.json has "
             "status=active; pause the loop first or pass --force"
         )
-    lock_path = project / "collaboration.lock"
     if lock_path.exists():
         raise SystemExit(
             f"refusing to apply preset while {lock_path} exists; "
@@ -84,14 +87,18 @@ def validate_apply_is_safe(project, state, force):
 
 
 def apply_preset(project, preset_name, force=False):
-    state_path = project / "collaboration_state.json"
+    # Resolve <root>/.collab/ via the single source of truth (works from any cwd).
+    root = bc.find_project_root(str(project))
+    paths = bc.collab_paths(root)
+    state_path = Path(paths["state"])
+    lock_path = Path(paths["lock"])
     if not state_path.is_file():
-        raise SystemExit(f"missing collaboration_state.json in {project}")
+        raise SystemExit(f"missing collaboration_state.json under {root}")
 
     preset = load_json(preset_path(preset_name))
     validate_preset(preset)
     state = load_json(state_path)
-    validate_apply_is_safe(project, state, force)
+    validate_apply_is_safe(lock_path, state, force)
 
     state["roles"] = preset["roles"]
     if "resource_profiles" in preset:

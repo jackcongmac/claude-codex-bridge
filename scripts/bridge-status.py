@@ -8,6 +8,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bridge_common as bc  # find_project_root + collab_paths (single source of truth)
+
 
 STATE_FILE = "collaboration_state.json"
 SIGNAL_FILE = "collaboration_signal.json"
@@ -115,10 +118,13 @@ def format_signal(signal):
 
 
 def build_dashboard(project):
-    project = Path(project)
-    state, state_error = read_json(project / STATE_FILE)
-    signal, signal_error = read_json(project / SIGNAL_FILE)
-    events, log_error = read_recent_events(project / LOG_FILE)
+    # Resolve the project root (any cwd depth) and read from <root>/.collab/ via
+    # the single source of truth, so we never report a stale legacy flat board.
+    root = bc.find_project_root(str(project)) if project else bc.find_project_root()
+    paths = bc.collab_paths(root)
+    state, state_error = read_json(Path(paths["state"]))
+    signal, signal_error = read_json(Path(paths["signal"]))
+    events, log_error = read_recent_events(Path(paths["log"]))
 
     if state_error:
         return "", state_error, 2

@@ -61,10 +61,12 @@ def collab_paths(root):
     """All coordination-layer file paths for a project root, under <root>/.collab/.
     Single source of truth — every script must derive paths from here so the
     board/signal/state/queue/lock/high-water all relocate together (no split-brain).
-    Back-compat: if <root>/.collab/ is absent but a legacy flat collaboration.md
-    exists at the root, fall back to the flat layout (and callers should warn)."""
+    Back-compat: if <root>/.collab/ is absent but any legacy flat coordination
+    file exists at the root, fall back to the flat layout (callers should warn)."""
+    _flat_markers = ("collaboration.md", "collaboration_state.json",
+                     "collaboration_signal.json", "collaboration_queue.json")
     legacy_flat = (not os.path.isdir(os.path.join(root, ".collab"))
-                   and os.path.exists(os.path.join(root, "collaboration.md")))
+                   and any(os.path.exists(os.path.join(root, m)) for m in _flat_markers))
     base = root if legacy_flat else os.path.join(root, ".collab")
     return {
         "root": root, "dir": base, "legacy_flat": legacy_flat,
