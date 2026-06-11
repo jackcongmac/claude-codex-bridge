@@ -10,6 +10,12 @@ One "tick" of the presence layer, called each board-wait cycle:
    every other armed agent wakes and learns that peer left. Dedup: marking
    departed under the lock means only one broadcast per departure.
 
+NOTE on the threshold: heartbeat (last_seen refresh) only happens while an agent
+is CONTINUOUSLY running board-wait. Interactive chat agents act in BURSTS, so the
+default --stale-after is generous (1800s / 30 min) — a shorter window
+false-flags a present-but-bursty agent as departed. A departed flag self-heals:
+any join/board write by that agent sets departed=false again.
+
 Usage: _presence.py tick --self NAME --project DIR [--stale-after SEC]
 Prints "DEPARTED <name>" for each peer it broadcasts as gone (else nothing).
 """
@@ -98,7 +104,7 @@ def main():
     t = sub.add_parser("tick")
     t.add_argument("--self", dest="self_name", required=True)
     t.add_argument("--project", default=None)
-    t.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "180")))
+    t.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "1800")))
     a = ap.parse_args()
     if a.cmd == "tick":
         proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
