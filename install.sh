@@ -102,17 +102,44 @@ if [ -n "$CODEX_BIN" ]; then
   fi
 fi
 
-# --- 6. done -----------------------------------------------------------------
+# --- 6. record paths (single source of truth for the skill) ------------------
+mkdir -p "$INSTALL_DIR"
+printf '%s\n' "$REPO_DIR" > "$INSTALL_DIR/repo_path"
+printf '%s\n' "$REPO_DIR/scripts" > "$INSTALL_DIR/scripts_path"
+say "recorded bridge paths -> $INSTALL_DIR/{repo_path,scripts_path}"
+
+# --- 7. install the skill so BOTH agents can discover it ---------------------
+# Codex reads ~/.codex/skills/<name>/SKILL.md; Claude reads ~/.claude/skills/.
+link_skill() {
+  local skills_dir="$1" name="claude-codex-bridge"
+  local target="$skills_dir/$name"
+  mkdir -p "$skills_dir"
+  if [ -L "$target" ]; then
+    local cur; cur="$(readlink "$target")"
+    if [ "$cur" = "$REPO_DIR/skill" ]; then echo "[ok] skill already linked: $target"; return; fi
+    warn "skill symlink exists pointing elsewhere ($cur) — leaving as-is: $target"; return
+  elif [ -e "$target" ]; then
+    warn "skill path exists and is not our symlink — leaving as-is: $target"; return
+  fi
+  ln -s "$REPO_DIR/skill" "$target" && say "linked skill -> $target"
+}
+link_skill "$HOME/.claude/skills"
+link_skill "$HOME/.codex/skills"
+
+# --- 8. done -----------------------------------------------------------------
 cat <<EOF
 
-Done. Bidirectional bridge installed.
+Done. claude-codex-bridge is installed (transport + skill).
 
-Next steps:
-  1. RESTART Codex so it loads the new claude_chat MCP server.
-  2. In Codex, talk to Claude:   call mcp__claude_chat__ask_claude  with a prompt
-  3. In Claude, talk to Codex:   call mcp__codex__codex             with a prompt
+  - Transport (MCP): Claude<->Codex can call each other.   [restart Codex to load]
+  - Skill: discoverable in both Claude and Codex.          [restart agents to load]
+  - Colleague tools: $ALLOWED_TOOLS
 
-The Claude colleague keeps memory per project directory automatically, and reads
-./collaboration.md for context if present.
-Allowed tools for the colleague: $ALLOWED_TOOLS
+To collaborate in ANY project, open it and tell either agent ONE thing:
+
+      set up agent collaboration here
+
+The agent runs init-collaboration.sh in that project (creating .collab/ +
+AGENTS.md/CLAUDE.md) — or prints you the one command if it has no shell. After
+that, every agent opening that project auto-joins. You never type a path.
 EOF

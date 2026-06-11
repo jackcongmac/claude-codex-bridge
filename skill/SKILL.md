@@ -1,13 +1,37 @@
 ---
 name: claude-codex-bridge
-description: Use when the user wants Claude Code and Codex to talk to each other — setting up, debugging, or using the bidirectional MCP bridge so Codex can call Claude (mcp__claude_chat__ask_claude) and Claude can call Codex (mcp__codex__codex). Triggers on "let Codex talk to Claude", "Claude/Codex collaboration", "ask_claude", "claude_chat MCP", or installing this bridge.
+description: Use when the user wants Claude Code and Codex to collaborate — ESPECIALLY to SET UP collaboration in the current project. Triggers on "set up agent collaboration here", "装 collab", "let Claude and Codex work together in this project", "start a collaboration board", "init collaboration here", "have two agents collaborate", "make this project a shared agent workspace", as well as using/debugging the bridge ("let Codex talk to Claude", "ask_claude", "claude_chat MCP").
 ---
 
 # claude-codex-bridge
 
-A bidirectional MCP bridge letting Claude Code and Codex call each other as tools.
+A bidirectional MCP bridge letting Claude Code and Codex call each other as tools,
+plus a per-project collaboration layer (a shared `.collab/` board both agents
+join, react to, and coordinate through).
+
+## Set up collaboration in THIS project (the one-phrase trigger)
+
+When the user asks to set up / start collaboration in the current project, do this:
+
+1. Resolve the bridge scripts dir — read the FIRST line of
+   `~/.claude-codex-bridge/scripts_path` (written by install.sh; the single source
+   of truth). If that file is missing, fall back to a known clone, e.g.
+   `~/claude-codex-bridge/scripts` or wherever the repo lives.
+2. **If you have a shell:** run `"$SCRIPTS/init-collaboration.sh" "$PWD"`. This
+   creates `<project-root>/.collab/` (the shared board/signal/state/queue) and
+   `AGENTS.md` / `CLAUDE.md` at the root (so every future agent in this project
+   auto-discovers and joins). Then show the user the absolute `join-collaboration.sh`
+   command it printed for the OTHER agent.
+3. **If you have no shell:** print that exact command for the user to run.
+
+Do NOT promise it "auto-happens" — you either run the command or hand the user the
+single command. After init, the membership protocol takes over: any agent opening
+this project reads the root `AGENTS.md`/`CLAUDE.md` and joins.
+
+## Using the bridge once set up
+
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,
-reads `collaboration.md`, can read/edit files — no shell).
+reads the board, can read/edit files — no shell).
 
 Use the bridge to route work by agent strengths and subscription constraints, not
 by round-robin turns. A common split is Claude Max for high-leverage reasoning /
