@@ -93,6 +93,24 @@ config check.
   is auto-pinned per working directory — no need to pass `session_id`. Pass
   `new_session: true` to reset, or `session_id` to target a specific session.
 
+### ALWAYS narrate before a peer call (it's slow and opaque)
+
+These calls spawn a whole other agent: they take **tens of seconds to several
+minutes**, show **no streaming/progress** (the user just sees one "Calling…"
+line), and can't be peeked into mid-run. So **before every** `mcp__codex__codex` /
+`mcp__codex__codex-reply` / `mcp__claude_chat__ask_claude` call, tell the user, in
+one or two sentences:
+1. **What** you're asking the peer to do and why;
+2. **Roughly how long** (give a magnitude, e.g. "~1–3 min — it's a full agent
+   reading N files");
+3. **What's normal vs stuck** — "you'll see a `Calling…` line with no output;
+   that's expected, not frozen; only worry past ~X min."
+
+Then make the call. Without this, the user stares at a silent spinner, can't tell
+working-vs-hung, and cancels — treat "I called the peer with no warning" as a UX
+bug, not a neutral action. For heavy/long peer work, prefer the board
+(`collaboration.md`) so progress is visible, over one big blocking call.
+
 ## Recommended collaboration pattern (coordination layer)
 
 The MCP servers are the transport; the coordination layer is what makes the two
