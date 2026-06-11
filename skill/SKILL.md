@@ -9,9 +9,28 @@ A bidirectional MCP bridge letting Claude Code and Codex call each other as tool
 plus a per-project collaboration layer (a shared `.collab/` board both agents
 join, react to, and coordinate through).
 
+## Proactive offer (turn a one-off call into a real collaboration)
+
+When you (the agent) are about to bridge to the OTHER agent for the first time in
+this project — e.g. you're about to call `mcp__codex__codex` / `mcp__codex__codex-reply`
+(Claude side) or `mcp__claude_chat__ask_claude` (Codex side) — FIRST check whether
+this project already has a shared board: does `<project-root>/.collab/` exist
+(walk up from cwd; also treat a root `AGENTS.md`/`CLAUDE.md` as "already set up")?
+
+- **If a board already exists:** just proceed (and ideally read it / join).
+- **If NOT, ask the user ONE line before making the one-off call:**
+  > "This project has no shared collaboration board yet. Want me to set one up so
+  > Claude and Codex can collaborate persistently here (shared `.collab/` board both
+  > join, react to, and coordinate through) — or just make this a one-off call?"
+  - **User says set it up / yes:** run the setup below, then proceed.
+  - **User says just this once / no:** make the single MCP call without a board.
+
+Don't nag: offer at most once per project. Once `.collab/` exists, never re-ask.
+
 ## Set up collaboration in THIS project (the one-phrase trigger)
 
-When the user asks to set up / start collaboration in the current project, do this:
+When the user asks to set up / start collaboration in the current project (or
+accepts the proactive offer above), do this:
 
 1. Resolve the bridge scripts dir — read the FIRST line of
    `~/.claude-codex-bridge/scripts_path` (written by install.sh; the single source
