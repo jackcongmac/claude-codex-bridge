@@ -14,10 +14,15 @@ join, react to, and coordinate through).
 When you (the agent) are about to bridge to the OTHER agent for the first time in
 this project — e.g. you're about to call `mcp__codex__codex` / `mcp__codex__codex-reply`
 (Claude side) or `mcp__claude_chat__ask_claude` (Codex side) — FIRST check whether
-this project already has a shared board: does `<project-root>/.collab/` exist
-(walk up from cwd; also treat a root `AGENTS.md`/`CLAUDE.md` as "already set up")?
+this project already has a shared board. Walk UP from cwd using the SAME boundary
+as `bridge_common.find_project_root` — stop at the nearest ancestor with `.collab/`,
+or at the nearest `.git/` WITHOUT `.collab/` (never cross a nested git/submodule
+boundary to a parent project's `.collab/`). It counts as "already set up" only if:
+- `<root>/.collab/` exists, OR
+- a root `AGENTS.md`/`CLAUDE.md` that **mentions** `claude-codex-bridge`, `.collab`,
+  or `join-collaboration.sh` (a user's own unrelated `AGENTS.md` does NOT count).
 
-- **If a board already exists:** just proceed (and ideally read it / join).
+- **If already set up:** just proceed (and ideally read the board / join).
 - **If NOT, ask the user ONE line before making the one-off call:**
   > "This project has no shared collaboration board yet. Want me to set one up so
   > Claude and Codex can collaborate persistently here (shared `.collab/` board both
@@ -25,7 +30,9 @@ this project already has a shared board: does `<project-root>/.collab/` exist
   - **User says set it up / yes:** run the setup below, then proceed.
   - **User says just this once / no:** make the single MCP call without a board.
 
-Don't nag: offer at most once per project. Once `.collab/` exists, never re-ask.
+Don't nag: offer at most once per CONVERSATION, and never again once `.collab/`
+exists. (Agent memory isn't durable across sessions, so this is a per-conversation
+rule, not a permanent per-project one.)
 
 ## Set up collaboration in THIS project (the one-phrase trigger)
 
