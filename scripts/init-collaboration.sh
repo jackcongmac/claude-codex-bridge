@@ -36,12 +36,27 @@ copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$COLLAB/collabor
 copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$COLLAB/collaboration_signal.json"
 copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$COLLAB/collaboration_state.json"
 copy_if_absent "$REPO_DIR/templates/collaboration_queue.json"  "$COLLAB/collaboration_queue.json"
-# Auto-discovery hooks -> project ROOT (a fresh agent window auto-reads these)
-copy_if_absent "$REPO_DIR/AGENTS.md" "$ROOT/AGENTS.md"
-copy_if_absent "$REPO_DIR/CLAUDE.md" "$ROOT/CLAUDE.md"
+# Auto-discovery hooks -> project ROOT (a fresh agent window auto-reads these).
+# When initializing INTO ANOTHER project, rewrite the relative `scripts/...` refs
+# to the ABSOLUTE bridge scripts dir (the scripts live in the bridge install, not
+# the target project) so the printed commands actually resolve. In the bridge repo
+# itself, relative paths already work, so leave them.
+install_hook() {
+  local src="$1" dst="$2"
+  if [ -e "$dst" ]; then echo "[!] exists, leaving as-is: $dst"; return; fi
+  if [ "$ROOT" = "$REPO_DIR" ]; then
+    cp "$src" "$dst"
+  else
+    sed "s#scripts/#$HERE/#g" "$src" > "$dst"
+  fi
+  echo "[ok] created: $dst"
+}
+install_hook "$REPO_DIR/AGENTS.md" "$ROOT/AGENTS.md"
+install_hook "$REPO_DIR/CLAUDE.md" "$ROOT/CLAUDE.md"
 TARGET="$COLLAB"   # the rest of this script's messages refer to the collab dir
 echo "[==>] project root: $ROOT"
 echo "[==>] coordination layer: $COLLAB"
+[ "$ROOT" = "$REPO_DIR" ] || echo "[==>] bridge scripts: $HERE  (AGENTS.md/CLAUDE.md point here)"
 
 cat <<EOF
 
@@ -58,20 +73,20 @@ Manual mode (works today):
 Autonomous mode (event-driven, no manual poke):
   - collaboration_state.json is the authoritative control state (starts paused).
   - Start a watcher per side; it auto-runs a turn when the other agent commits:
-        scripts/watch-collaboration.sh --as claude --project "$TARGET"
-        scripts/watch-collaboration.sh --as codex  --project "$TARGET"
+        $HERE/watch-collaboration.sh --as claude --project "$ROOT"
+        $HERE/watch-collaboration.sh --as codex  --project "$ROOT"
   - To start the loop, set status="active" and next_actor to whichever agent
     should move first in collaboration_state.json, then bump the signal.
-  - Watch it: tail -f "$TARGET/collaboration_auto.log"
+  - Watch it: tail -f "$COLLAB/collaboration_auto.log"
   - SAFETY: read-only by default; pass --allow-write to let an agent edit project
     files. max_turns / max_cost in the state file cap the loop.
 
 Multi-agent mode (--queue-mode: N agents per AI via a work queue):
   - Seed tasks in collaboration_queue.json (set control.status="active").
   - Start one watcher per agent with a distinct --agent-id:
-        scripts/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-1 --role executor --project "$TARGET"
-        scripts/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-2 --role executor --project "$TARGET"
-        scripts/watch-collaboration.sh --queue-mode --as claude --agent-id claude-rev   --role reviewer --project "$TARGET"
+        $HERE/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-1 --role executor --project "$ROOT"
+        $HERE/watch-collaboration.sh --queue-mode --as codex  --agent-id codex-exec-2 --role executor --project "$ROOT"
+        $HERE/watch-collaboration.sh --queue-mode --as claude --agent-id claude-rev   --role reviewer --project "$ROOT"
   - Agents claim eligible tasks in parallel (claim-under-lock + epoch fencing).
     Budget is control.max_turns in collaboration_queue.json.
 

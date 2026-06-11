@@ -31,7 +31,7 @@ SIGNAL="$COLLAB/collaboration_signal.json"
 
 if [ ! -f "$BOARD" ] || [ ! -f "$SIGNAL" ]; then
   echo "[!] No board in $PROJECT yet. Create it first:"
-  echo "      scripts/init-collaboration.sh \"$PROJECT\""
+  echo "      $HERE/init-collaboration.sh \"$PROJECT\""
   exit 1
 fi
 
@@ -89,7 +89,7 @@ YOUR NEXT ACTIONS:
   1. Read the board to catch up:   cat "$BOARD"
   2. Announce yourself in your "## $SELF Outbox" + bump the signal.
   3. ARM (run in the BACKGROUND so you wake on peer updates):
-       scripts/board-wait.sh --self "$SELF" --project "$PROJECT" &
+       $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
   4. When board-wait exits: if CHANGED, act + reply + bump signal + re-ARM;
      if TIMEOUT, just re-ARM. Never treat silence as "peer is done" — re-ARM.
 EOF
