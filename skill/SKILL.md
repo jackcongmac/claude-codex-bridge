@@ -76,18 +76,18 @@ agents collaborate. Drop the templates into a project:
 scripts/init-collaboration.sh            # into current dir (idempotent)
 ```
 
-This creates `collaboration.md` (shared board: roles, outboxes, file locks,
-decision log) and `collaboration_signal.json` (low-token change signal).
+This creates `.collab/collaboration.md` (shared board: roles, outboxes, file
+locks, decision log) and `.collab/collaboration_signal.json` (low-token change signal).
 
 The loop:
-1. Each agent reads `collaboration_signal.json` first; re-reads `collaboration.md`
+1. Each agent reads `.collab/collaboration_signal.json` first; re-reads the board
    only when `update_id` changed.
-2. Each writes status/findings to its own outbox in `collaboration.md`, then bumps
-   `collaboration_signal.json` (`update_id` + one-line `summary`).
+2. Each writes status/findings to its own outbox in `.collab/collaboration.md`, then
+   bumps `.collab/collaboration_signal.json` (`update_id` + one-line `summary`).
 3. Use the MCP bridge (`mcp__codex__codex` / `mcp__claude_chat__ask_claude`) to
    poke the other agent to take a turn.
 
-The Claude colleague is already told to read `collaboration.md` automatically.
+The Claude colleague is already told to read the board automatically.
 
 ## Resource-aware routing
 
