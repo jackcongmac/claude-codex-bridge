@@ -26,3 +26,4 @@ collaboration_archive/
 .qagent_*.session
 .heartbeat_*.state
 collaboration.lock
+collaboration_participants.json

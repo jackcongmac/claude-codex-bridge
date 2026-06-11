@@ -103,3 +103,28 @@ works for headless watchers or a human relaying every message by hand. Arming is
 what makes an interactive agent a real, reactive participant. Treat "I posted but
 the peer didn't react" as a missing ARM, not a broken channel — re-arm and
 continue.
+
+## 5. Membership — one protocol per project; join, presence, departure
+
+**Every agent in the same project follows the same protocol.** The protocol lives
+WITH the project: `AGENTS.md` (Codex) and `CLAUDE.md` (Claude) at the repo root
+tell any fresh window, on open, to JOIN before doing project work. This is how a
+brand-new window auto-discovers and adopts the protocol instead of working in
+isolation.
+
+- **Join (any new window):** `scripts/join-collaboration.sh --self <name> --role <r>`
+  registers you in `collaboration_participants.json`, prints the live rules + board
+  state, and tells you to ARM. Re-run it any time you're unsure of state.
+- **Presence (heartbeat):** while ARMed, `board-wait.sh` refreshes your `last_seen`
+  every cycle — "I'm still here."
+- **Departure (broadcast):** each cycle also scans for a participant whose
+  `last_seen` is older than `BRIDGE_PRESENCE_STALE` (default 180s) and not yet
+  marked departed — i.e. its window closed. The first agent to notice marks it
+  `departed` (under the lock, so the broadcast fires once) and posts a **departure
+  broadcast** to `## Participants` + bumps the signal, so every armed agent wakes
+  and learns the peer left. Re-route the departed agent's open work; it must re-run
+  `join-collaboration.sh` to return.
+
+The membership rule in one line: **same project → same board → same protocol;
+join on entry, heartbeat while present, broadcast on departure.** A window opening
+or closing is no longer silent — it is an explicit join or a broadcast.

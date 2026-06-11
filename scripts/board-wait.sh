@@ -45,6 +45,12 @@ field() { _S="$SIGNAL" _K="$1" "$PY3" -c "import json,os;print(json.load(open(os
 
 DEADLINE=$(( $(date +%s) + TIMEOUT ))
 while true; do
+  # Presence tick: refresh my heartbeat + broadcast any peer whose window closed
+  # (went stale). A broadcast bumps the signal, which the loop below then sees.
+  DEP="$("$PY3" "$(dirname "${BASH_SOURCE[0]}")/_presence.py" tick --self "$SELF" --project "$PROJECT" 2>/dev/null || true)"
+  if [ -n "$DEP" ]; then
+    echo "$DEP"   # e.g. "DEPARTED codex-exec-2" — surface to the waking agent
+  fi
   UID_NOW="$(field update_id)"; BY="$(field updated_by)"
   if [ -n "$UID_NOW" ] && [ "$UID_NOW" != "$SINCE" ] && [ "$BY" != "$SELF" ]; then
     SEC="$(field changed_section)"; SUM="$(field summary)"
