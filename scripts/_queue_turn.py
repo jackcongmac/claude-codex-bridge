@@ -90,19 +90,20 @@ def main():
     ap.add_argument("--as", dest="side", required=True, choices=["claude", "codex"])
     ap.add_argument("--agent-id", required=True)
     ap.add_argument("--role", default="")
-    ap.add_argument("--project", default=os.getcwd())
+    ap.add_argument("--project", default=None)
     ap.add_argument("--allow-write", action="store_true")
     ap.add_argument("--lock-ttl", type=int, default=600)
     ap.add_argument("--lease-sec", type=int, default=1800)
     a = ap.parse_args()
 
     agent_id = sanitize_agent_id(a.agent_id)
-    project = os.path.abspath(a.project)
-    queue_p = os.path.join(project, "collaboration_queue.json")
-    board_p = os.path.join(project, "collaboration.md")
-    lock_p = os.path.join(project, "collaboration.lock")
-    sig_p = os.path.join(project, "collaboration_signal.json")
-    sess_p = os.path.join(project, ".qagent_%s.session" % agent_id)
+    project = os.path.abspath(a.project) if a.project else at.find_project_root()
+    P = at.collab_paths(project)
+    queue_p = P["queue"]
+    board_p = P["board"]
+    lock_p = P["lock"]
+    sig_p = P["signal"]
+    sess_p = os.path.join(P["dir"], ".qagent_%s.session" % agent_id)
 
     q = at.read_json(queue_p)
     if q is None:

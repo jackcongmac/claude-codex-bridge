@@ -9,10 +9,17 @@
 # Safe: never overwrites an existing collaboration.md / collaboration_signal.json.
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="${1:-$PWD}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$HERE/.." && pwd)"
+. "$HERE/bridge-paths.sh"
 
-[ -d "$TARGET" ] || { echo "[x] target dir not found: $TARGET" >&2; exit 1; }
+# Resolve the project ROOT: explicit arg, else git-root/cwd auto-location.
+RAW_TARGET="${1:-$PWD}"
+[ -d "$RAW_TARGET" ] || { echo "[x] target dir not found: $RAW_TARGET" >&2; exit 1; }
+bridge_resolve "$RAW_TARGET"
+ROOT="$BRIDGE_ROOT"
+COLLAB="$ROOT/.collab"          # always create the .collab/ layout for new projects
+mkdir -p "$COLLAB"
 
 copy_if_absent() {
   local src="$1" dst="$2"
@@ -24,10 +31,17 @@ copy_if_absent() {
   fi
 }
 
-copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$TARGET/collaboration.md"
-copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$TARGET/collaboration_signal.json"
-copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$TARGET/collaboration_state.json"
-copy_if_absent "$REPO_DIR/templates/collaboration_queue.json"  "$TARGET/collaboration_queue.json"
+# Coordination layer -> <root>/.collab/
+copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$COLLAB/collaboration.md"
+copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$COLLAB/collaboration_signal.json"
+copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$COLLAB/collaboration_state.json"
+copy_if_absent "$REPO_DIR/templates/collaboration_queue.json"  "$COLLAB/collaboration_queue.json"
+# Auto-discovery hooks -> project ROOT (a fresh agent window auto-reads these)
+copy_if_absent "$REPO_DIR/AGENTS.md" "$ROOT/AGENTS.md"
+copy_if_absent "$REPO_DIR/CLAUDE.md" "$ROOT/CLAUDE.md"
+TARGET="$COLLAB"   # the rest of this script's messages refer to the collab dir
+echo "[==>] project root: $ROOT"
+echo "[==>] coordination layer: $COLLAB"
 
 cat <<EOF
 

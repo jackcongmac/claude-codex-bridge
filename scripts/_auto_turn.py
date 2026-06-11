@@ -90,7 +90,7 @@ def halt(project, state_path, lock_path, run_id, reason, lock_held=False, **extr
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--as", dest="side", required=True, choices=["claude", "codex"])
-    ap.add_argument("--project", default=os.getcwd())
+    ap.add_argument("--project", default=None)
     ap.add_argument("--allow-write", action="store_true")
     ap.add_argument("--lock-ttl", type=int, default=600)
     ap.add_argument("--run-id", default=None)
@@ -98,16 +98,17 @@ def main():
                     help="observe-only: detect a stale peer turn, log + notify, never write.")
     a = ap.parse_args()
 
-    project = os.path.abspath(a.project)
+    project = os.path.abspath(a.project) if a.project else find_project_root()
     self_actor = "Claude" if a.side == "claude" else "Codex"
     run_id = a.run_id or ("run-%d-%s" % (int(time.time()), self_actor.lower()))
 
-    signal_p = os.path.join(project, "collaboration_signal.json")
-    state_p = os.path.join(project, "collaboration_state.json")
-    board_p = os.path.join(project, "collaboration.md")
-    lock_p = os.path.join(project, "collaboration.lock")
-    hw_p = os.path.join(project, ".watcher_%s.state" % a.side)
-    sess_p = os.path.join(project, ".watcher_%s.session" % a.side)
+    P = collab_paths(project)
+    signal_p = P["signal"]
+    state_p = P["state"]
+    board_p = P["board"]
+    lock_p = P["lock"]
+    hw_p = os.path.join(P["dir"], ".watcher_%s.state" % a.side)
+    sess_p = os.path.join(P["dir"], ".watcher_%s.session" % a.side)
 
     if a.heartbeat:
         # Slice 3b-min: OBSERVE-ONLY. Detect a stale peer turn and notify a human;
@@ -125,7 +126,7 @@ def main():
         if age < int(os.environ.get("BRIDGE_STALE_SEC", "300")):
             sys.exit(0)
         # de-dupe: notify at most once per stuck update_id
-        hb_p = os.path.join(project, ".heartbeat_%s.state" % a.side)
+        hb_p = os.path.join(P["dir"], ".heartbeat_%s.state" % a.side)
         uid = sig.get("update_id")
         if (read_json(hb_p, {}) or {}).get("notified_update_id") == uid:
             sys.exit(0)

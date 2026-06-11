@@ -33,10 +33,11 @@ def _age(last_seen, now):
 
 
 def tick(project, self_name, stale_after):
-    parts_p = os.path.join(project, "collaboration_participants.json")
-    board_p = os.path.join(project, "collaboration.md")
-    signal_p = os.path.join(project, "collaboration_signal.json")
-    lock_p = os.path.join(project, "collaboration.lock")
+    P = bc.collab_paths(project)
+    parts_p = P["participants"]
+    board_p = P["board"]
+    signal_p = P["signal"]
+    lock_p = P["lock"]
     now = time.time()
     now_s = bc.now_str()
 
@@ -96,11 +97,12 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     t = sub.add_parser("tick")
     t.add_argument("--self", dest="self_name", required=True)
-    t.add_argument("--project", default=os.getcwd())
+    t.add_argument("--project", default=None)
     t.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "180")))
     a = ap.parse_args()
     if a.cmd == "tick":
-        for name in tick(os.path.abspath(a.project), a.self_name, a.stale_after):
+        proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
+        for name in tick(proj, a.self_name, a.stale_after):
             print("DEPARTED %s" % name)
 
 

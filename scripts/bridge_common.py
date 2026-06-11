@@ -35,6 +35,50 @@ def now_str():
     return time.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+# ---------- project root + coordination-layer paths (single source of truth) ----------
+
+def find_project_root(start=None):
+    """Walk UP from `start` (default cwd). Per ancestor, in order:
+    - contains '.collab/' -> return it (initialized project).
+    - contains '.git/' (without .collab/) -> return it as the project root and
+      STOP — never cross a nested git/submodule boundary to a parent .collab/.
+    - else keep walking up. None found -> return the starting dir.
+    Explicit paths from a caller's --project always take precedence over this."""
+    cur = os.path.abspath(start or os.getcwd())
+    start_abs = cur
+    while True:
+        if os.path.isdir(os.path.join(cur, ".collab")):
+            return cur
+        if os.path.isdir(os.path.join(cur, ".git")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return start_abs
+        cur = parent
+
+
+def collab_paths(root):
+    """All coordination-layer file paths for a project root, under <root>/.collab/.
+    Single source of truth — every script must derive paths from here so the
+    board/signal/state/queue/lock/high-water all relocate together (no split-brain).
+    Back-compat: if <root>/.collab/ is absent but a legacy flat collaboration.md
+    exists at the root, fall back to the flat layout (and callers should warn)."""
+    legacy_flat = (not os.path.isdir(os.path.join(root, ".collab"))
+                   and os.path.exists(os.path.join(root, "collaboration.md")))
+    base = root if legacy_flat else os.path.join(root, ".collab")
+    return {
+        "root": root, "dir": base, "legacy_flat": legacy_flat,
+        "board": os.path.join(base, "collaboration.md"),
+        "signal": os.path.join(base, "collaboration_signal.json"),
+        "state": os.path.join(base, "collaboration_state.json"),
+        "queue": os.path.join(base, "collaboration_queue.json"),
+        "participants": os.path.join(base, "collaboration_participants.json"),
+        "log": os.path.join(base, "collaboration_auto.log"),
+        "archive": os.path.join(base, "collaboration_archive"),
+        "lock": os.path.join(base, "collaboration.lock"),
+    }
+
+
 # ---------- file helpers (atomic) ----------
 
 def read_json(path, default=None):
@@ -71,8 +115,9 @@ LOG_MAX_BYTES = int(os.environ.get("BRIDGE_LOG_MAX_BYTES", str(5 * 1024 * 1024))
 
 
 def log_event(project, event, **fields):
-    path = os.path.join(project, "collaboration_auto.log")
+    path = collab_paths(project)["log"]
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
             os.replace(path, path + ".1")  # single-generation rotation
         rec = {"ts": now_str(), "event": event}
@@ -356,6 +401,7 @@ def run_codex(prompt, project, allow_write, sess_path):
 __all__ = [
     "OTHER", "VALID_STATUS", "VALID_ACTOR",
     "KNOWN_ROLES", "ROLE_PRIV", "SPECIAL_ROLES", "WRITE_ROLES", "REVIEWER_VERDICTS", "DEFAULT_ROLE",
+    "find_project_root", "collab_paths",
     "now_str", "read_json", "atomic_write", "atomic_write_json",
     "LOG_MAX_BYTES", "log_event", "notify",
     "_pid_alive", "acquire_lock", "release_lock",

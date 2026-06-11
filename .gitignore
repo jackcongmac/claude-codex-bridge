@@ -27,3 +27,6 @@ collaboration_archive/
 .heartbeat_*.state
 collaboration.lock
 collaboration_participants.json
+
+# Coordination layer (runtime, per-project) — entire dir
+.collab/

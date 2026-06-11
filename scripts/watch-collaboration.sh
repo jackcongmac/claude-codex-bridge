@@ -36,14 +36,16 @@ while [ $# -gt 0 ]; do
 done
 
 [ "$SIDE" = "claude" ] || [ "$SIDE" = "codex" ] || { echo "[x] --as must be claude or codex" >&2; exit 2; }
-PROJECT="$(cd "$PROJECT" && pwd)"
-SIGNAL="$PROJECT/collaboration_signal.json"
-STATE="$PROJECT/collaboration_state.json"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bridge-paths.sh"
+bridge_resolve "$PROJECT"
+PROJECT="$BRIDGE_ROOT"; COLLAB="$BRIDGE_COLLAB"
+SIGNAL="$COLLAB/collaboration_signal.json"
+STATE="$COLLAB/collaboration_state.json"
 PY3="$(command -v python3)"
 
 if [ -n "$QUEUE_MODE" ]; then
   [ -n "$AGENT_ID" ] || { echo "[x] --queue-mode requires --agent-id <id>" >&2; exit 2; }
-  [ -f "$PROJECT/collaboration_queue.json" ] || { echo "[x] no collaboration_queue.json — seed it (templates/collaboration_queue.json)" >&2; exit 1; }
+  [ -f "$COLLAB/collaboration_queue.json" ] || { echo "[x] no collaboration_queue.json — seed it (init-collaboration.sh)" >&2; exit 1; }
 else
   [ -f "$STATE" ] || { echo "[x] no collaboration_state.json in $PROJECT — run scripts/init-collaboration.sh first" >&2; exit 1; }
 fi
@@ -69,16 +71,16 @@ run_turn() {
   if [ -n "$QUEUE_MODE" ]; then
     "$PY3" "$HERE/_queue_turn.py" --as "$SIDE" --agent-id "$AGENT_ID" ${ROLE:+--role "$ROLE"} \
       --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
-      >>"$PROJECT/collaboration_auto.log" 2>&1 || true
+      >>"$COLLAB/collaboration_auto.log" 2>&1 || true
   else
     "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --lock-ttl "$LOCK_TTL" $ALLOW_WRITE \
-      >>"$PROJECT/collaboration_auto.log" 2>&1 || true   # exit codes are advisory; harness logs
+      >>"$COLLAB/collaboration_auto.log" 2>&1 || true   # exit codes are advisory; harness logs
   fi
 }
 
 echo "[==>] watching $SIGNAL"
 echo "      side=$SIDE  project=$PROJECT  allow_write=${ALLOW_WRITE:-no}  lock_ttl=${LOCK_TTL}s"
-echo "      tail -f \"$PROJECT/collaboration_auto.log\" to watch the conversation."
+echo "      tail -f \"$COLLAB/collaboration_auto.log\" to watch the conversation."
 
 # Run once at startup in case a turn is already pending for this side.
 run_turn
@@ -91,7 +93,7 @@ if [ -z "$QUEUE_MODE" ] && [ "${HEARTBEAT_INTERVAL:-0}" -gt 0 ] 2>/dev/null; the
   ( while true; do
       sleep "$HEARTBEAT_INTERVAL"
       "$PY3" "$HERE/_auto_turn.py" --as "$SIDE" --project "$PROJECT" --heartbeat \
-        >>"$PROJECT/collaboration_auto.log" 2>&1 || true
+        >>"$COLLAB/collaboration_auto.log" 2>&1 || true
     done ) &
   HB_PID=$!
   trap 'kill "$HB_PID" 2>/dev/null' EXIT

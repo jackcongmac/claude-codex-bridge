@@ -80,16 +80,17 @@ def rotate(text, keep, protected):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--project", default=os.getcwd())
+    ap.add_argument("--project", default=None)
     ap.add_argument("--keep", type=int, default=DEFAULT_KEEP)
     ap.add_argument("--force", action="store_true", help="rotate even if under the size threshold")
     a = ap.parse_args()
 
-    project = os.path.abspath(a.project)
-    board_p = os.path.join(project, "collaboration.md")
-    signal_p = os.path.join(project, "collaboration_signal.json")
-    lock_p = os.path.join(project, "collaboration.lock")
-    archive_dir = os.path.join(project, "collaboration_archive")
+    project = os.path.abspath(a.project) if a.project else at.find_project_root()
+    P = at.collab_paths(project)
+    board_p = P["board"]
+    signal_p = P["signal"]
+    lock_p = P["lock"]
+    archive_dir = P["archive"]
 
     if not os.path.exists(board_p):
         print("no collaboration.md"); sys.exit(0)

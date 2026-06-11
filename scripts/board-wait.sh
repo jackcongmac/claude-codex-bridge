@@ -33,8 +33,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$SELF" ] || { echo "[x] --self <YourName> required (the name to IGNORE so you don't wake on your own writes)" >&2; exit 2; }
-PROJECT="$(cd "$PROJECT" && pwd)"
-SIGNAL="$PROJECT/collaboration_signal.json"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bridge-paths.sh"
+bridge_resolve "$PROJECT"
+PROJECT="$BRIDGE_ROOT"
+SIGNAL="$BRIDGE_COLLAB/collaboration_signal.json"
 PY3="$(command -v python3)"
 [ -f "$SIGNAL" ] || { echo "[x] no $SIGNAL — run init-collaboration.sh first" >&2; exit 1; }
 
@@ -57,7 +59,7 @@ while true; do
     echo "CHANGED update_id=$UID_NOW by=$BY section=$SEC"
     echo "summary: $SUM"
     echo "--- '$SEC' section of collaboration.md ---"
-    _P="$PROJECT" _SEC="$SEC" "$PY3" -c "
+    _P="$BRIDGE_COLLAB" _SEC="$SEC" "$PY3" -c "
 import os
 t=open(os.path.join(os.environ['_P'],'collaboration.md')).read()
 h='## '+os.environ['_SEC']; i=t.find(h)

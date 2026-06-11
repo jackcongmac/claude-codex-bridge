@@ -21,11 +21,13 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$SELF" ] || { echo "[x] --self <YourName> required (your stable agent id this session)" >&2; exit 2; }
-PROJECT="$(cd "$PROJECT" && pwd)"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$HERE/bridge-paths.sh"
+bridge_resolve "$PROJECT"
+PROJECT="$BRIDGE_ROOT"; COLLAB="$BRIDGE_COLLAB"
 PY3="$(command -v python3)"
-BOARD="$PROJECT/collaboration.md"
-SIGNAL="$PROJECT/collaboration_signal.json"
+BOARD="$COLLAB/collaboration.md"
+SIGNAL="$COLLAB/collaboration_signal.json"
 
 if [ ! -f "$BOARD" ] || [ ! -f "$SIGNAL" ]; then
   echo "[!] No board in $PROJECT yet. Create it first:"
@@ -34,9 +36,9 @@ if [ ! -f "$BOARD" ] || [ ! -f "$SIGNAL" ]; then
 fi
 
 # Register in participants.json (presence + role + last_seen), idempotent by name.
-SELF="$SELF" ROLE="$ROLE" PROJECT="$PROJECT" "$PY3" - <<'PY'
+SELF="$SELF" ROLE="$ROLE" COLLAB="$COLLAB" "$PY3" - <<'PY'
 import json, os, time
-p = os.path.join(os.environ["PROJECT"], "collaboration_participants.json")
+p = os.path.join(os.environ["COLLAB"], "collaboration_participants.json")
 try:
     reg = json.load(open(p))
 except Exception:
@@ -70,7 +72,7 @@ Current participants:
 EOF
 "$PY3" -c "
 import json,os
-r=json.load(open(os.path.join('$PROJECT','collaboration_participants.json')))
+r=json.load(open(os.path.join('$COLLAB','collaboration_participants.json')))
 for a in r['participants']: print('  - %s (role=%s, last_seen=%s)'%(a['name'],a.get('role'),a.get('last_seen')))
 "
 echo ""
