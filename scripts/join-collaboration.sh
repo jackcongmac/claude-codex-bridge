@@ -92,4 +92,8 @@ YOUR NEXT ACTIONS:
        $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
   4. When board-wait exits: if CHANGED, act + reply + bump signal + re-ARM;
      if TIMEOUT, just re-ARM. Never treat silence as "peer is done" — re-ARM.
+  5. Before handing real work to the peer, CONFIRM the channel is live:
+       $HERE/bridge-handshake.sh --self "$SELF" --peer <Them>
+     GO = both armed & listening; NO-GO prints the exact fix. Don't post into
+     the void — silence from the peer is a failed handshake, not a dead channel.
 EOF

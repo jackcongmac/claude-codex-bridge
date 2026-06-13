@@ -73,6 +73,12 @@ while true; do
   if [ -n "$DEP" ]; then
     echo "$DEP"   # e.g. "DEPARTED codex-exec-2" — surface to the waking agent
   fi
+  # Handshake ACK (harness layer): if a peer addressed a liveness ping to me, pong
+  # it now. This proves to the initiator that MY board-wait is alive + ARMed. It
+  # uses a SEPARATE channel (collaboration_handshake.json) and never touches the
+  # signal, so it does NOT wake my agent or perturb update_id — checked before the
+  # signal so a ping can't be confused with a real board change.
+  "$PY3" "$(dirname "${BASH_SOURCE[0]}")/_handshake.py" ack --self "$SELF" --project "$PROJECT" 2>/dev/null || true
   UID_NOW="$(field update_id)"; BY="$(field updated_by)"
   if [ -n "$UID_NOW" ] && [ "$UID_NOW" != "$SINCE" ] && [ "$BY" != "$SELF" ]; then
     SEC="$(field changed_section)"; SUM="$(field summary)"

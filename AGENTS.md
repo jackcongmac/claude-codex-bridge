@@ -31,6 +31,12 @@ participants list, shows you the current board state, and prints the exact
    say in one line WHAT you're about to do and ROUGHLY how long, and what a normal
    wait looks like. A predictable heads-up before each opaque step is how the two
    agents earn the user's trust; an un-narrated slow action reads as "stuck."
+7. **Handshake before you hand off.** Don't dump a task into the board or fire a
+   blocking peer call until the channel is confirmed live. Run
+   `scripts/bridge-handshake.sh --self <You> --peer <Them>` first: it fast-fails with
+   a fix if the peer isn't ARMed/joined, and prints a GO confirmation when both sides
+   are listening. Silence from the peer = a failed handshake, not a dead channel —
+   never leave the user staring at a hung call.
 
 If you are a brand-new window and unsure of state: run Step 0, read the board's
 `## Participants` and the latest `## *Outbox*` entries, then announce yourself.

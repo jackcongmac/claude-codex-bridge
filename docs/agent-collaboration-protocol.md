@@ -118,7 +118,7 @@ isolation.
 - **Presence (heartbeat):** while ARMed, `board-wait.sh` refreshes your `last_seen`
   every cycle — "I'm still here."
 - **Departure (broadcast):** each cycle also scans for a participant whose
-  `last_seen` is older than `BRIDGE_PRESENCE_STALE` (default 180s) and not yet
+  `last_seen` is older than `BRIDGE_PRESENCE_STALE` (default 1800s) and not yet
   marked departed — i.e. its window closed. The first agent to notice marks it
   `departed` (under the lock, so the broadcast fires once) and posts a **departure
   broadcast** to `## Participants` + bumps the signal, so every armed agent wakes
@@ -128,3 +128,33 @@ isolation.
 The membership rule in one line: **same project → same board → same protocol;
 join on entry, heartbeat while present, broadcast on departure.** A window opening
 or closing is no longer silent — it is an explicit join or a broadcast.
+
+## 6. Handshake before you hand off — prove the channel is live
+
+Membership + ARM make collaboration *possible*; the handshake confirms it *before*
+you rely on it. The failure it kills: you tell the agents to "just contact each
+other," one side isn't actually ready (not restarted, not joined, board-wait not
+ARMed), and the board post / blocking peer call hangs in silence — the user can't
+tell working-from-hung and cancels.
+
+**Run it before the first real hand-off of a session:**
+```
+scripts/bridge-handshake.sh --self <You> --peer <Them>
+```
+It does two things, and it NEVER hangs (hard timeout):
+1. **Static checks** (instant): board found; *you* are ARMed; the peer is joined,
+   not departed, heartbeat fresh; transport wired (`codex` MCP + `claude_chat`).
+2. **Live ping:** writes a ping addressed to the peer on a SEPARATE channel
+   (`collaboration_handshake.json` — it never touches the signal's `update_id`).
+   The peer's `board-wait.sh` pongs it at the **harness layer** in its poll loop, so
+   a pong proves the peer's ARM mechanism is genuinely alive — without waking the
+   peer agent or relying on it to "remember to reply."
+
+- **GO** → a short confirmation (peer live, board, round-trip). Proceed with
+  confidence.
+- **NO-GO** → the exact remediation (ARM in BOTH windows / re-join / re-install +
+  restart Codex), then re-run. A non-answer is a diagnosable failed handshake, never
+  a silent hang.
+
+The rule in one line: **handshake before handoff — confirm the peer is listening
+before you speak into the void.**

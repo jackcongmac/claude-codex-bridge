@@ -54,6 +54,14 @@ Do NOT promise it "auto-happens" — you either run the command or hand the user
 single command. After init, the membership protocol takes over: any agent opening
 this project reads the root `AGENTS.md`/`CLAUDE.md` and joins.
 
+4. **Finish with a handshake, not a hope.** Once both agents have joined + ARMed,
+   run `"$SCRIPTS/bridge-handshake.sh" --self <You> --peer <Them>` and show the
+   user the result. GO prints a confirmation (peer live, board, round-trip) so the
+   user can relax; NO-GO prints the exact fix (usually "ARM board-wait in the other
+   window"). This is the antidote to "I told them to talk and it just hung": never
+   hand real work to the peer — or tell the user it's collaborating — until a
+   handshake (or a fresh peer reaction this session) confirms the channel is live.
+
 ## Using the bridge once set up
 
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,

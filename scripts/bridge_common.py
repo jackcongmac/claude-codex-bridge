@@ -78,6 +78,12 @@ def collab_paths(root):
         "log": os.path.join(base, "collaboration_auto.log"),
         "archive": os.path.join(base, "collaboration_archive"),
         "lock": os.path.join(base, "collaboration.lock"),
+        # Handshake is a SEPARATE channel from the signal: a liveness ping/pong the
+        # peer's board-wait ACKs at the harness layer. It must never touch
+        # collaboration_signal.json's update_id (that means "real content changed").
+        # Guarded by its own small lock, not the main collaboration.lock.
+        "handshake": os.path.join(base, "collaboration_handshake.json"),
+        "handshake_lock": os.path.join(base, "collaboration_handshake.lock"),
     }
 
 
