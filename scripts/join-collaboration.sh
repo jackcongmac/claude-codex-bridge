@@ -96,4 +96,6 @@ YOUR NEXT ACTIONS:
        $HERE/bridge-handshake.sh --self "$SELF" --peer <Them>
      GO = both armed & listening; NO-GO prints the exact fix. Don't post into
      the void — silence from the peer is a failed handshake, not a dead channel.
+  6. Staying current: this clone has no auto-update. Check for a newer version with
+       $HERE/bridge-update.sh --check     (then  $HERE/bridge-update.sh  to pull it)
 EOF
