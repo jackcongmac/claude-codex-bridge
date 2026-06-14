@@ -52,7 +52,9 @@ shared-board handoff prompts.
 See [`docs/resource-aware-routing.md`](docs/resource-aware-routing.md) for the
 full subscription, billing, context, and permission routing matrix, and
 [`docs/role-presets.md`](docs/role-presets.md) for preset files you can apply
-to `collaboration_state.json`.
+to `collaboration_state.json`. Future multi-CLI support is intentionally parked
+behind [`docs/adapter-rfc.md`](docs/adapter-rfc.md); today this bridge supports
+Claude Code + Codex.
 
 ```
    ┌──────────────┐   mcp__codex__codex          ┌──────────────┐
