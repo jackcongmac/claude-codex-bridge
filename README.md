@@ -198,6 +198,19 @@ The loop:
 > in). The bridge gives you both halves; the board is what makes a review →
 > execute → re-review loop actually work.
 
+Check whether the joined agents are alive without mistaking the normal
+`board-wait` re-arm gap for a dead peer:
+
+```bash
+scripts/bridge-liveness.sh report --self Codex --project .
+scripts/bridge-liveness.sh report --self Codex --project . --json
+```
+
+`LIVE` means the agent is present and currently armed. `PRESENT` means the
+heartbeat is fresh but the one-shot watcher is between wake and re-arm. `STALE`,
+`DEAD`, and `DEPARTED` mean the heartbeat is aging, expired, or explicitly marked
+departed.
+
 ## Autonomous mode (event-driven, no manual poke)
 
 Manual mode needs a human to invoke each turn. Autonomous mode runs the loop
