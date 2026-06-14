@@ -190,11 +190,26 @@ def call_claude(prompt, session_id=None, new_session=False):
     return text, final_sid, is_err
 
 
+def client_label(params):
+    """Label the calling MCP client (its SURFACE) from the initialize clientInfo:
+    'name/version', e.g. 'claude-desktop/1.2' vs 'codex/...'. This is how the bridge
+    tells a DESKTOP caller from a CLI caller — a desktop app reaches the bridge only
+    over MCP, never via the shell. Returns 'unknown/?' when clientInfo is absent."""
+    ci = (params or {}).get("clientInfo")
+    if not isinstance(ci, dict):
+        ci = {}
+    return "%s/%s" % (ci.get("name") or "unknown", ci.get("version") or "?")
+
+
 def handle(msg):
     mid = msg.get("id")
     method = msg.get("method")
     if method == "initialize":
         params = msg.get("params", {}) or {}
+        # Record which surface is calling (stderr is safe for MCP stdio; stdout is the
+        # protocol channel). Lets a future collab layer route by caller surface.
+        sys.stderr.write("[claude_chat] client: %s\n" % client_label(params))
+        sys.stderr.flush()
         client_ver = params.get("protocolVersion")
         ver = client_ver if client_ver in SUPPORTED_PROTOCOLS else DEFAULT_PROTOCOL
         result(mid, {
