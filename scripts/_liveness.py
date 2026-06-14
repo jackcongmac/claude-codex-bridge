@@ -87,7 +87,14 @@ def report(args):
     p = collab_paths(project)
     reg = read_json(p["participants"], default={"participants": []}) or {"participants": []}
     now = time.time()
-    rows = [verdict(a, p["dir"], now, args.present_window, args.stale_after)
+    # The short present-window is OPT-IN. By default present_window == stale_after,
+    # so there is NO short STALE tier: last_seen only ticks while board-wait is armed,
+    # so a busy/active (un-armed) agent's heartbeat ages — defaulting to a short window
+    # would false-stale it (the bug shipped in e2c5f3d). A short window is only honest
+    # once a presence-keepalive ticks last_seen independent of board-wait (next slice).
+    present_window = (args.present_window if args.present_window is not None
+                      else args.stale_after)
+    rows = [verdict(a, p["dir"], now, present_window, args.stale_after)
             for a in reg.get("participants", []) if a.get("name")]
     if args.json:
         print(json.dumps(rows))
@@ -106,7 +113,9 @@ def main():
     r = sub.add_parser("report")
     r.add_argument("--self", dest="self_name", default="")
     r.add_argument("--project", default=os.getcwd())
-    r.add_argument("--present-window", type=float, default=60.0)
+    r.add_argument("--present-window", type=float, default=None,
+                   help="short-window seconds for the STALE tier; default = --stale-after "
+                        "(no short STALE) until a presence-keepalive makes it honest")
     r.add_argument("--stale-after", type=float,
                    default=float(os.environ.get("BRIDGE_PRESENCE_STALE", 1800)))
     r.add_argument("--json", action="store_true")

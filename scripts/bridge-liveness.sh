@@ -8,8 +8,9 @@
 # present agent reads PRESENT/LIVE — never a misleading DEAD — with ARMED shown as a
 # secondary detail.
 #
-# Verdicts: LIVE (present + armed) · PRESENT (present, in the re-arm gap) ·
-#           STALE (heartbeat aging) · DEAD (past departure threshold) · DEPARTED.
+# Verdicts: LIVE (present + armed) · PRESENT (present / busy / re-arm gap) ·
+#           STALE (heartbeat aging — only with an explicit short --present-window) ·
+#           DEAD (past departure threshold) · DEPARTED.
 #
 # Usage:
 #   bridge-liveness.sh [report] [--self S] [--project DIR] [--watch] [--interval N]
@@ -20,7 +21,11 @@
 set -euo pipefail
 
 SELF=""; PROJECT="$PWD"; WATCH=0; INTERVAL="${BRIDGE_LIVENESS_INTERVAL:-5}"; JSON=0
-PRESENT_WINDOW="${BRIDGE_PRESENT_WINDOW:-60}"
+# Empty present-window = let _liveness default it to --stale-after (NO short STALE
+# tier): last_seen only ticks while board-wait is armed, so defaulting to a short
+# window would false-stale a busy/active agent (the bug shipped in e2c5f3d). A short
+# window is opt-in and only honest once a presence-keepalive lands.
+PRESENT_WINDOW="${BRIDGE_PRESENT_WINDOW:-}"
 STALE_AFTER="${BRIDGE_PRESENCE_STALE:-1800}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -42,14 +47,20 @@ bridge_resolve "$PROJECT"
 PROJECT="$BRIDGE_ROOT"
 PY3="$(command -v python3)"
 
+# Only pass --present-window when explicitly set; otherwise _liveness defaults it to
+# --stale-after. Unquoted expansion keeps the empty case a no-op under `set -u`.
+PW_OPT=""
+[ -n "$PRESENT_WINDOW" ] && PW_OPT="--present-window $PRESENT_WINDOW"
+PW_LABEL="${PRESENT_WINDOW:+${PRESENT_WINDOW}s}"; PW_LABEL="${PW_LABEL:-default(=${STALE_AFTER}s, no short STALE)}"
+
 run_once() {
   if [ "$JSON" = "1" ]; then
     "$PY3" "$HERE/_liveness.py" report --self "$SELF" --project "$PROJECT" \
-      --present-window "$PRESENT_WINDOW" --stale-after "$STALE_AFTER" --json
+      $PW_OPT --stale-after "$STALE_AFTER" --json
   else
-    echo "Liveness — $BRIDGE_COLLAB  (present-window=${PRESENT_WINDOW}s)"
+    echo "Liveness — $BRIDGE_COLLAB  (present-window=${PW_LABEL})"
     "$PY3" "$HERE/_liveness.py" report --self "$SELF" --project "$PROJECT" \
-      --present-window "$PRESENT_WINDOW" --stale-after "$STALE_AFTER"
+      $PW_OPT --stale-after "$STALE_AFTER"
   fi
 }
 

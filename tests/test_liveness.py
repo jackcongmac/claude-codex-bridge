@@ -67,9 +67,25 @@ class LivenessVerdictTests(unittest.TestCase):
         self.assertEqual(row["verdict"], "PRESENT")
 
     def test_between_present_window_and_stale_is_STALE(self):
+        # the short present-window is OPT-IN (explicit --present-window 60)
         now = time.time()
         self._write_participants([{"name": "Codex", "last_seen": _stamp(now - 300)}])
         self.assertEqual(self._report()["Codex"]["verdict"], "STALE")
+
+    def test_default_present_window_does_not_false_stale_a_busy_agent(self):
+        # REGRESSION (false-stale bug shipped in e2c5f3d/v0.7.2): with NO explicit
+        # --present-window, last_seen only ticks while board-wait is armed, so a
+        # busy/active agent's heartbeat ages — it must NOT be reported STALE by
+        # default. Default present-window = stale-after (no short STALE tier) until a
+        # presence-keepalive makes a short window honest.
+        now = time.time()
+        self._write_participants([{"name": "Codex", "last_seen": _stamp(now - 300)}])
+        r = subprocess.run(
+            [sys.executable, str(LV), "report", "--project", self.tmp, "--json"],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        rows = {row["name"]: row for row in json.loads(r.stdout)}
+        self.assertEqual(rows["Codex"]["verdict"], "PRESENT")
 
     def test_older_than_stale_is_DEAD(self):
         now = time.time()
