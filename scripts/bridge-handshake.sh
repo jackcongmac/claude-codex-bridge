@@ -20,13 +20,18 @@
 # Usage:
 #   bridge-handshake.sh --self <Me> --peer <Them> [--project DIR]
 #                       [--timeout SEC] [--interval SEC] [--no-transport]
+#                       [--message "first task to hand the peer on GO"]
+#
+# --message: on GO, also post this line to the board + bump the signal, so the
+#   peer's board-wait wakes the peer WITH the first task in hand — closing the gap
+#   between "channel confirmed" and "peer actually started". No-op on NO-GO.
 #
 # Exit 0 = GO (channel live). Non-zero = NO-GO (remediation printed). Never hangs
 # past --timeout.
 set -euo pipefail
 
 SELF=""; PEER=""; PROJECT="$PWD"; TIMEOUT=""; INTERVAL="${BRIDGE_HANDSHAKE_INTERVAL:-1}"
-CHECK_TRANSPORT=1
+CHECK_TRANSPORT=1; MESSAGE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
@@ -34,6 +39,7 @@ while [ $# -gt 0 ]; do
     --project) PROJECT="$2"; shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
     --interval) INTERVAL="$2"; shift 2;;
+    --message) MESSAGE="$2"; shift 2;;
     --no-transport) CHECK_TRANSPORT=0; shift;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
@@ -93,34 +99,59 @@ fi
 
 # 3. Peer present, not departed, fresh last_seen
 if [ -f "$PARTICIPANTS" ]; then
-  PEER_STATE="$(_P="$PARTICIPANTS" _PEER="$PEER" _STALE="$STALE" "$PY3" - <<'PY' 2>/dev/null || echo "missing"
+  PEER_STATE="$(_P="$PARTICIPANTS" _PEER="$PEER" _STALE="$STALE" "$PY3" - <<'PY' 2>/dev/null || echo "missing|"
 import json, os, time
 from datetime import datetime
 reg = json.load(open(os.environ["_P"]))
 peer = os.environ["_PEER"]; stale = float(os.environ["_STALE"])
-for a in reg.get("participants", []):
-    if a.get("name") == peer:
-        if a.get("departed"):
-            print("departed"); break
-        ls = a.get("last_seen", "")
+names = [a.get("name", "") for a in reg.get("participants", []) if a.get("name")]
+match = next((a for a in reg.get("participants", []) if a.get("name") == peer), None)
+if match is not None:
+    if match.get("departed"):
+        print("departed")
+    else:
+        ls = match.get("last_seen", "")
         try:
             t = time.mktime(datetime.strptime(ls.rsplit(" ", 1)[0], "%Y-%m-%d %H:%M:%S").timetuple())
             age = time.time() - t
             print("fresh %d" % age if age <= stale else "stale %d" % age)
         except Exception:
             print("present")
-        break
 else:
-    print("missing")
+    # G1: a case-only mismatch is the most common typo — point straight at the real name.
+    ci = next((n for n in names if n.lower() == peer.lower()), None)
+    if ci:
+        print("suggest %s" % ci)
+    else:
+        print("missing|%s" % ",".join(names))
 PY
 )"
   case "$PEER_STATE" in
     fresh*) ok "peer $PEER joined, heartbeat fresh (${PEER_STATE#fresh })";;
     stale*) warn "peer $PEER joined but last_seen is OLD (${PEER_STATE#stale }s) — window may be closed; the live ping below is the real test";;
     present) ok "peer $PEER joined";;
-    departed) bad "peer $PEER marked DEPARTED (window closed)"; addfix "re-join in the $PEER window:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer"; FAIL=1;;
-    *) bad "peer $PEER has not joined this board"; addfix "in the $PEER window:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer  then ARM board-wait"; FAIL=1;;
+    departed)
+      bad "peer $PEER previously joined but is marked DEPARTED"
+      addfix "if the $PEER window is CLOSED — open it, then in it:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer"
+      addfix "if it's still OPEN — just re-join in it:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer   (then ARM board-wait)"
+      FAIL=1;;
+    suggest\ *)
+      SUGG="${PEER_STATE#suggest }"
+      bad "no peer named '$PEER' — but '$SUGG' is joined (names are case-sensitive)"
+      addfix "retry with the exact name:  $HERE/bridge-handshake.sh --self \"$SELF\" --peer \"$SUGG\""
+      FAIL=1;;
+    missing*)
+      JOINED="${PEER_STATE#missing}"; JOINED="${JOINED#|}"
+      if [ -n "$JOINED" ]; then bad "peer $PEER has not joined this board (joined here: $JOINED)"
+      else bad "peer $PEER has not joined — nobody has joined this board yet"; fi
+      addfix "in the $PEER window:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer   then ARM board-wait"
+      FAIL=1;;
+    *) bad "peer $PEER has not joined this board"; addfix "in the $PEER window:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer   then ARM board-wait"; FAIL=1;;
   esac
+else
+  bad "no participants registered yet — nobody has joined this board"
+  addfix "in the $PEER window:  $HERE/join-collaboration.sh --self \"$PEER\" --role peer   then ARM board-wait"
+  FAIL=1
 fi
 
 # 4. Transport wired (best-effort)
@@ -157,6 +188,42 @@ if RTT="$("$PY3" "$HERE/_handshake.py" poll --self "$SELF" --peer "$PEER" --nonc
   printf '   Board:      %s   (signal update_id=%s)\n' "$COLLAB" "${UID_NOW:-?}"
   printf '   %s\n' "${RTT/PONG /Round-trip: }s"
   printf '   两个 agent 现在都在监听同一块板。开始。\n'
+  # G5: optionally hand the first task across NOW, so the confirmed channel is used
+  # immediately — peer's board-wait wakes the peer with this line in hand.
+  if [ -n "$MESSAGE" ]; then
+    if _HERE="$HERE" _PROJECT="$PROJECT" _SELF="$SELF" _PEER="$PEER" _MSG="$MESSAGE" "$PY3" - <<'PY' 2>/dev/null
+import os, sys
+sys.path.insert(0, os.environ["_HERE"])
+from bridge_common import (collab_paths, append_to_outbox, read_json,
+                           atomic_write_json, now_str, acquire_lock, release_lock)
+p = collab_paths(os.environ["_PROJECT"])
+self_name = os.environ["_SELF"]; peer = os.environ["_PEER"]; msg = os.environ["_MSG"]
+# Take the SAME collaboration.lock every real board/signal write takes (see
+# _presence.py / _auto_turn.py) — append + bump is a read-modify-write that would
+# otherwise clobber a concurrent presence broadcast or auto-turn commit.
+if not acquire_lock(p["lock"], "handshake-handoff-%d" % os.getpid(), ttl=30, wait=10):
+    sys.exit(1)
+try:
+    section = "%s Outbox" % self_name
+    append_to_outbox(p["board"], self_name, "**[handshake → %s]** %s" % (peer, msg))
+    prev = int((read_json(p["signal"], default={}) or {}).get("update_id", 0))
+    # Full signal schema (matches _presence.py): board-wait reads changed_section
+    # to show the peer the section that changed — without it the peer wakes but
+    # can't see WHAT changed.
+    atomic_write_json(p["signal"], {
+        "update_id": prev + 1, "updated_at": now_str(), "updated_by": self_name,
+        "changed_section": section,
+        "summary": ("handshake handoff to %s: %s" % (peer, msg))[:200],
+    })
+finally:
+    release_lock(p["lock"])
+PY
+    then
+      printf '   \033[1;32m↪\033[0m 已把第一条活儿发到板上并 bump signal —— %s 的 board-wait 会带着它醒来。\n' "$PEER"
+    else
+      warn "channel is live, but posting --message to the board failed; hand it off manually"
+    fi
+  fi
   exit 0
 else
   echo ""
@@ -167,5 +234,8 @@ else
   echo   "     $HERE/join-collaboration.sh --self \"$PEER\" --role peer"
   echo   "     $HERE/board-wait.sh --self \"$PEER\" --project \"$PROJECT\" &"
   echo   "   修好后重跑：$HERE/bridge-handshake.sh --self \"$SELF\" --peer \"$PEER\""
+  echo   "   注意：直接 MCP 调用（mcp__codex__codex / ask_claude）会 spawn 一个全新的临时实例，"
+  echo   "         它总会回应、但不在这块板上、也不是这个 armed 窗口——适合一次性提问，"
+  echo   "         不能替代持续协作。要让*这个*窗口参与协作，仍需握手 GO。"
   exit 1
 fi

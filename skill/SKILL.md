@@ -34,6 +34,29 @@ Don't nag: offer at most once per CONVERSATION, and never again once `.collab/`
 exists. (Agent memory isn't durable across sessions, so this is a per-conversation
 rule, not a permanent per-project one.)
 
+## Two channels — and which one needs a handshake first
+
+There are TWO ways to reach the other agent, and conflating them is the original
+"就尬在那里" bug. Know which you're using:
+
+- **One-off MCP call** (`mcp__codex__codex` / `mcp__codex__codex-reply` /
+  `mcp__claude_chat__ask_claude`): spawns a **fresh, throwaway** peer instance that
+  always answers — it is NOT the user's running window and is NOT on the board. Great
+  for a single bounded question. No handshake needed (it can't hang on a missing peer;
+  it spins one up). DO still narrate (it's slow — see narration rule below).
+- **Persistent board hand-off** (post to `.collab/collaboration.md` + bump the
+  signal, expecting the peer's *already-open, armed* window to react): this is real
+  collaboration — and the ONLY one that silently hangs when the peer isn't joined +
+  armed. **Before the first board hand-off of a session, run a handshake.** If you
+  catch yourself about to write "I've told Codex, it'll pick this up" — stop, you're
+  on the board channel; confirm it's live first (handshake GO, or a fresh peer
+  reaction already seen this session).
+
+Rule of thumb: *spawning* a peer never needs a handshake; *relying on a running
+peer to react* always does. When a handshake is NO-GO and the user just wants a
+quick answer, fall back to the one-off MCP call — but say so, so they know it's a
+throwaway instance, not their collaborating window.
+
 ## Set up collaboration in THIS project (the one-phrase trigger)
 
 When the user asks to set up / start collaboration in the current project (or
