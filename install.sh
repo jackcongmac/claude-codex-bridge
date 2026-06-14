@@ -48,10 +48,22 @@ else
   warn "          credentials. Re-run with BRIDGE_READONLY=1 for a read-only setup."
 fi
 
-# --- 3. install the wrapper to a stable location -----------------------------
+# --- 3. install the wrapper -------------------------------------------------
+# Symlink it (default) so `git pull` / bridge-update keeps it current — a copy would
+# silently go stale until the next ./install.sh. Set BRIDGE_WRAPPER_COPY=1 to force a
+# stable copy; fall back to a copy automatically where symlinks aren't supported.
 mkdir -p "$INSTALL_DIR"
-cp "$REPO_DIR/claude_chat_mcp.py" "$INSTALL_DIR/claude_chat_mcp.py"
-say "installed wrapper -> $INSTALL_DIR/claude_chat_mcp.py"
+WRAPPER_SRC="$REPO_DIR/claude_chat_mcp.py"
+WRAPPER_DST="$INSTALL_DIR/claude_chat_mcp.py"
+if [ "${BRIDGE_WRAPPER_COPY:-0}" = "1" ]; then
+  rm -f "$WRAPPER_DST"; cp "$WRAPPER_SRC" "$WRAPPER_DST"
+  say "installed wrapper (copy) -> $WRAPPER_DST  (re-run ./install.sh after updates)"
+elif ln -sf "$WRAPPER_SRC" "$WRAPPER_DST" 2>/dev/null && [ -L "$WRAPPER_DST" ]; then
+  say "linked wrapper -> $WRAPPER_DST  (tracks the clone; updates on git pull)"
+else
+  rm -f "$WRAPPER_DST"; cp "$WRAPPER_SRC" "$WRAPPER_DST"
+  warn "symlinks unsupported here — copied wrapper (re-run ./install.sh after updates)"
+fi
 
 # --- 4. register Codex -> Claude MCP server (TOML-safe) -----------------------
 [ -f "$CODEX_CONFIG" ] || { mkdir -p "$CODEX_HOME"; touch "$CODEX_CONFIG"; }
