@@ -38,6 +38,37 @@ def _age(last_seen, now):
         return 0.0   # unparseable -> treat as fresh (don't false-positive a departure)
 
 
+def heartbeat(project, self_name):
+    """Refresh ONLY my last_seen (and clear my own departed flag). No departure scan,
+    no signal bump — safe to call frequently and independent of board-wait. The
+    presence keepalive calls this on a short interval so last_seen reflects "I'm
+    alive" even mid-turn, which is what makes a short liveness present-window honest
+    (otherwise last_seen only ticks while board-wait is armed).
+
+    Takes the collaboration lock BRIEFLY for the read-modify-write: a lock-free
+    full-file rewrite could lose a concurrent departure write under lock (resurrecting
+    a departed peer -> duplicate broadcast). If the lock is busy, skip this beat —
+    last_seen just refreshes next cycle."""
+    P = bc.collab_paths(project)
+    parts_p = P["participants"]
+    lock_p = P["lock"]
+    now_s = bc.now_str()
+    if not bc.acquire_lock(lock_p, "heartbeat-%s" % self_name, ttl=10, wait=2):
+        return   # lock busy — refresh next cycle (cheap to skip one beat)
+    try:
+        reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
+        mine = next((a for a in reg["participants"] if a.get("name") == self_name), None)
+        if mine is None:
+            reg["participants"].append({"name": self_name, "role": "peer",
+                                        "joined_at": now_s, "last_seen": now_s, "departed": False})
+        else:
+            mine["last_seen"] = now_s
+            mine["departed"] = False
+        bc.atomic_write_json(parts_p, reg)
+    finally:
+        bc.release_lock(lock_p)
+
+
 def tick(project, self_name, stale_after):
     P = bc.collab_paths(project)
     parts_p = P["participants"]
@@ -47,22 +78,11 @@ def tick(project, self_name, stale_after):
     now = time.time()
     now_s = bc.now_str()
 
-    # 1) heartbeat: refresh my last_seen (best-effort, no lock needed for my own row;
-    #    a torn read just costs one cycle).
-    reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
-    mine = next((a for a in reg["participants"] if a.get("name") == self_name), None)
-    if mine is None:
-        reg["participants"].append({"name": self_name, "role": "peer",
-                                    "joined_at": now_s, "last_seen": now_s, "departed": False})
-    else:
-        mine["last_seen"] = now_s
-        mine["departed"] = False
-    try:
-        bc.atomic_write_json(parts_p, reg)
-    except Exception:
-        pass
+    # 1) heartbeat: refresh my last_seen (shared with the keepalive).
+    heartbeat(project, self_name)
 
     # 2) departure scan
+    reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
     gone = [a for a in reg["participants"]
             if a.get("name") != self_name and not a.get("departed")
             and _age(a.get("last_seen", ""), now) > stale_after]
@@ -105,11 +125,16 @@ def main():
     t.add_argument("--self", dest="self_name", required=True)
     t.add_argument("--project", default=None)
     t.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "1800")))
+    h = sub.add_parser("heartbeat")
+    h.add_argument("--self", dest="self_name", required=True)
+    h.add_argument("--project", default=None)
     a = ap.parse_args()
+    proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
     if a.cmd == "tick":
-        proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
         for name in tick(proj, a.self_name, a.stale_after):
             print("DEPARTED %s" % name)
+    elif a.cmd == "heartbeat":
+        heartbeat(proj, a.self_name)
 
 
 if __name__ == "__main__":
