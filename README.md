@@ -133,11 +133,25 @@ cd claude-codex-bridge
 # BRIDGE_READONLY=1 ./install.sh  # read-only colleague
 ```
 
+**Via npm (packaged; publish pending).** The package is built; once it's published
+to npm this is the frictionless path — one artifact installs/updates BOTH halves:
+
+```bash
+npm install -g claude-codex-bridge    # (after the package is published)
+claude-codex-bridge install           # wires up both MCP directions + the skill
+npm update -g claude-codex-bridge     # update (npm owns updates for the npm install)
+```
+
+(`claude-codex-bridge update` / `scripts/bridge-update.sh` do a `git pull` — that's the
+updater for the **git-clone** install above, not the npm one.) Until the package is
+published, use the git clone.
+
 The installer is idempotent. It:
 
 1. Detects `python3`, `claude`, and `codex` (override the Claude path with
    `CLAUDE_BIN=/path/to/claude ./install.sh`).
-2. Copies the wrapper to `~/.claude-codex-bridge/`.
+2. Symlinks the wrapper into `~/.claude-codex-bridge/` (so `git pull` /
+   `bridge-update` keeps it current; `BRIDGE_WRAPPER_COPY=1` forces a copy).
 3. Adds `[mcp_servers.claude_chat]` to `~/.codex/config.toml` (backing up first),
    pinning the detected `claude` path via `CLAUDE_BIN`.
 4. Registers Codex as a user-scope Claude MCP server (all projects), using the

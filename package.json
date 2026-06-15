@@ -1,0 +1,45 @@
+{
+  "name": "claude-codex-bridge",
+  "version": "0.7.2",
+  "description": "A bidirectional MCP bridge + per-project collaboration layer letting Claude Code and Codex find, reach, and stay in sync with each other.",
+  "bin": {
+    "claude-codex-bridge": "bin/claude-codex-bridge"
+  },
+  "files": [
+    "install.sh",
+    "claude_chat_mcp.py",
+    "scripts/",
+    "skill/",
+    "templates/",
+    "docs/",
+    "bin/",
+    "AGENTS.md",
+    "CLAUDE.md"
+  ],
+  "scripts": {
+    "test": "python3 -m unittest discover -s tests -p 'test_*.py'"
+  },
+  "engines": {
+    "node": ">=14"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jackcongmac/claude-codex-bridge.git"
+  },
+  "keywords": [
+    "claude",
+    "codex",
+    "mcp",
+    "agent",
+    "collaboration",
+    "claude-code",
+    "multi-agent"
+  ],
+  "author": "Jack Cong",
+  "license": "MIT",
+  "homepage": "https://github.com/jackcongmac/claude-codex-bridge#readme"
+}

@@ -154,10 +154,11 @@ several were lived during development.
   E2E and no true two-window agent test**.
 - **No "doctor"/repair command** for half-broken state (stale locks, dead
   board-wait, lingering pidfiles).
-- **Update is one-command, not a package.** `bridge-update` + version-check + a
-  symlinked wrapper now exist, but distribution is still a git clone — no
-  npm/Homebrew package, no auto-update, and `join` only *tells* the user to run the
-  version check (doesn't run it).
+- **Update tooling + an npm package exist; publishing + auto-update don't yet.**
+  `bridge-update` + version-check + a symlinked wrapper, and now an npm package
+  (`package.json` + `bin/claude-codex-bridge`, verified via `npm pack`) — but it is
+  NOT published yet (needs the maintainer's npm account), there's no auto-update, and
+  `join` only *tells* the user to run the version check (doesn't run it).
 - **Docs/mode sprawl** (manual / autonomous / queue, many `DESIGN_*.md`) raises
   onboarding cost.
 
@@ -177,15 +178,18 @@ several were lived during development.
    prints the exact `board-wait` ARM command. It does **not** supervise board-wait,
    because board-wait's exit is the harness wake signal and must remain visible to
    the agent.
-3. **Fix MCP board discovery.** Teach `claude_chat_mcp.py` to locate
-   `.collab/collaboration.md` via the same root logic as `find_project_root`.
-4. **Liveness notify + revive.** On a DEAD/DEPARTED transition: OS + board notify
-   (debounced); `--revive` re-ARMs self and nudges the peer + escalates to the human
-   (no MCP-spawn — a throwaway isn't the armed window).
-5. **Distribution.** npm single package (one `npm update -g` updates both halves,
-   cross-platform) as the primary channel; Claude Code plugin marketplace later for
-   the Claude half (discovery + native auto-update). Have `join`/handshake run the
-   version check, not just mention it.
+3. ✅ **Fix MCP board discovery — DONE.** `claude_chat_mcp.py` now resolves the board
+   via `_find_board(cwd)` (walks up like `find_project_root`, `.collab` then legacy
+   flat, stops at a `.git` boundary) and names it in the per-call `grounding(cwd)`.
+4. ✅ **Liveness notify + revive — DONE.** `bridge-liveness.sh --notify` (via
+   `_notify.py`) pages once on a peer's transition into DEAD/DEPARTED (OS + a "##
+   Liveness" board note, debounced, quiet bootstrap/recovery); `bridge-revive.sh`
+   re-ensures self and nudges a down peer + notifies the human (no MCP-spawn).
+5. **Distribution — package BUILT, publish pending.** An npm single package
+   (`package.json` + `bin/claude-codex-bridge`; `npm pack` ships both halves, excludes
+   tests/.collab) is ready; `npm publish` needs the maintainer's npm account (outward,
+   not done autonomously). Claude Code plugin marketplace later for the Claude half.
+   Still to do: have `join`/handshake actually RUN the version check, not just mention it.
 6. **Cross-surface (collab-MCP-server).** Pull the coordination layer behind one
    local MCP server any client (CLI or desktop) connects to; presence = MCP
    connection liveness; wake via MCP notifications. Makes the bridge surface-agnostic.

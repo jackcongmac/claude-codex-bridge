@@ -1,0 +1,15 @@
+# Published contents are an allowlist (package.json "files"); this also strips junk
+# from inside included dirs (e.g. scripts/__pycache__) and never ships tests or the
+# per-project runtime board.
+__pycache__/
+*.pyc
+*.bak
+._*
+tests/
+sessions/
+.collab/
+collaboration.md
+collaboration_*.json
+collaboration.lock
+.bridge_push.lock
+DESIGN_*.md

@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# claude-codex-bridge — npm launcher over the bridge's scripts. `npm i -g
+# claude-codex-bridge` then `claude-codex-bridge install` wires up BOTH halves
+# (Claude<->Codex MCP + the skill); `npm update -g claude-codex-bridge` updates
+# everything. A thin dispatcher — the real work lives in install.sh / scripts/.
+set -euo pipefail
+
+# Resolve the symlink chain (npm installs the bin as a symlink in its prefix, so a
+# plain BASH_SOURCE/.. would point at the npm prefix, not the package dir). macOS
+# readlink has no -f, so walk the chain manually.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+cmd="${1:-help}"
+if [ "$#" -gt 0 ]; then shift; fi
+
+case "$cmd" in
+  install)
+    exec "$ROOT/install.sh" "$@" ;;
+  update)
+    exec "$ROOT/scripts/bridge-update.sh" "$@" ;;
+  version|--version|-v)
+    node -e "console.log(require(process.argv[1]).version)" "$ROOT/package.json" ;;
+  help|--help|-h)
+    cat <<EOF
+claude-codex-bridge — Claude Code <-> Codex collaboration bridge
+
+Usage: claude-codex-bridge <command> [args]
+
+  install            wire up the bridge (MCP both directions + the skill); runs
+                     install.sh. Restart Codex afterward to load the MCP server.
+  update             pull the latest into this install (scripts/bridge-update.sh)
+  version            print the version
+  <name> [args]      run a bridge script: scripts/bridge-<name>.sh (or .py), e.g.
+                     'live --self Claude', 'handshake --self A --peer B',
+                     'liveness', 'revive', 'post', 'review', 'status'
+
+After 'install', restart Codex to load the claude_chat MCP server.
+EOF
+    ;;
+  *)
+    sh="$ROOT/scripts/bridge-$cmd.sh"
+    py="$ROOT/scripts/bridge-$cmd.py"
+    if [ -x "$sh" ]; then exec "$sh" "$@"; fi
+    if [ -f "$py" ]; then exec python3 "$py" "$@"; fi
+    echo "unknown command: $cmd  (try 'claude-codex-bridge help')" >&2
+    exit 2 ;;
+esac
