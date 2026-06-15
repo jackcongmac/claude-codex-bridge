@@ -1,9 +1,12 @@
 {
-  "name": "claude-codex-bridge",
-  "version": "0.7.2",
+  "name": "@jackcongus/claude-codex-bridge",
+  "version": "0.8.0",
   "description": "A bidirectional MCP bridge + per-project collaboration layer letting Claude Code and Codex find, reach, and stay in sync with each other.",
   "bin": {
     "claude-codex-bridge": "bin/claude-codex-bridge"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "install.sh",

@@ -16,8 +16,11 @@ class PackageJsonTests(unittest.TestCase):
         self.pkg = json.loads(PKG.read_text())
 
     def test_required_fields(self):
-        self.assertEqual(self.pkg["name"], "claude-codex-bridge")
+        self.assertEqual(self.pkg["name"], "@jackcongus/claude-codex-bridge")
         self.assertRegex(self.pkg["version"], r"^\d+\.\d+\.\d+")
+        # scoped packages default to restricted; this makes the publish public + free
+        self.assertEqual(self.pkg.get("publishConfig", {}).get("access"), "public")
+        # the CLI command name stays unscoped regardless of the package scope
         self.assertIn("claude-codex-bridge", self.pkg["bin"])
         self.assertIsInstance(self.pkg["files"], list)
         self.assertEqual(self.pkg.get("license"), "MIT")

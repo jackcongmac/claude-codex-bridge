@@ -137,10 +137,13 @@ cd claude-codex-bridge
 to npm this is the frictionless path — one artifact installs/updates BOTH halves:
 
 ```bash
-npm install -g claude-codex-bridge    # (after the package is published)
-claude-codex-bridge install           # wires up both MCP directions + the skill
-npm update -g claude-codex-bridge     # update (npm owns updates for the npm install)
+npm install -g @jackcongus/claude-codex-bridge   # (after the package is published)
+claude-codex-bridge install                      # wires up both MCP directions + the skill
+npm update -g @jackcongus/claude-codex-bridge    # update (npm owns updates here)
 ```
+
+(The package is scoped — `@jackcongus/claude-codex-bridge` — because the unscoped
+name is taken by an unrelated project. The CLI command stays `claude-codex-bridge`.)
 
 (`claude-codex-bridge update` / `scripts/bridge-update.sh` do a `git pull` — that's the
 updater for the **git-clone** install above, not the npm one.) Until the package is
