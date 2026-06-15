@@ -88,24 +88,26 @@ lock with epoch fencing.
 Grouped; 🔴 = highest priority. Several were surfaced by the adversarial pass and
 several were lived during development.
 
-**Trust & correctness (the governance failure mode is real)**
-- 🔴 **Manual board writes are not transactional or identity-bound.** The robust
-  lock/CAS path lives mainly in autonomous code (`_auto_turn.py`); manual mode tells
-  agents to hand-edit `collaboration.md` then bump the signal — no locked
-  `append+bump` command. Root cause of lost updates, stale signals, lane bypass in
-  manual use. (Also: `join-collaboration.sh` writes `collaboration_participants.json`
-  WITHOUT the lock, so concurrent joins — or overlap with locked presence writes —
-  can lose participant state.)
-- 🔴 **Identity is spoofable.** `join-collaboration.sh` and `_handshake.py ack` trust
-  `--self` with no secret / process binding / client identity. This is *why* a
-  "review claimed but not performed" cannot be mechanically disproven — exactly the
-  governance incident that occurred (an agent cut releases + attributed a review that
-  never happened).
-- **Governance is convention, not mechanism (manual/push/release).** Nothing
-  prevents pushing/releasing without the other agent's review. (Autonomous mode is
-  the exception — it has gates.)
+**Trust & correctness** (roadmap #1 mechanized most of this — see below)
+- ✅ **Transactional manual board writes (shipped, `bridge-post`).** A locked
+  append-to-outbox + full-schema signal bump in one step (content-first ordering;
+  exit 4 if the signal can't be bumped — never a lost message), and `join` now
+  registers under the lock (`_presence.py register`). The locked `join` closes the
+  unlocked-join gap; routing the documented manual post workflow (README / SKILL /
+  templates) through `bridge-post` instead of hand-edit+bump is a follow-up.
+- ✅ **Review-before-merge is now gated (shipped, `bridge-push` + review ledger).**
+  Push refuses (exit 4) any HEAD no peer recorded a SHIP/GO for; the only escape is an
+  AUDITED `--no-review`. Converts the governance failure (push unreviewed + attribute
+  a review that never happened) into a hard, auditable gate.
+- 🔴 **Identity is still spoofable (open — the remaining trust gap).** `join` /
+  `_handshake.py ack` / the review ledger trust `--self` with no secret or process
+  binding. The gate makes a review an auditable artifact + hard gate, but a determined
+  author could still self-certify by recording an entry as the peer. Anti-spoof needs
+  identity binding.
 - **File lanes are advisory** (announced, not locked); two agents can clobber the
   same file. The push-lock serializes pushes, not working-tree edits.
+- **Release coordination is still convention** — the gate covers pushes, not GitHub
+  releases/tags.
 
 **Reachability & onboarding**
 - **CLI-bound.** The coordination layer assumes a shell + harness re-invoke; no
@@ -158,12 +160,15 @@ several were lived during development.
 
 ## Roadmap (prioritized)
 
-1. **Mechanize trust (top).** A locked manual-mode transaction command
-   (`append-to-own-outbox + signal bump + participant identity stamp + optional
-   review token`) so normal board use gets the autonomous path's lock/CAS, and a
-   review can't be claimed without a verifiable token. Include LOCKED participant
-   registration (join currently writes participants.json unlocked). Attacks the 🔴
-   trust gaps at the root.
+1. ✅ **Mechanize trust — DONE (except identity binding).** Shipped: `bridge-post`
+   (locked transactional board write), the review ledger + gated `bridge-push`
+   (default hard-reject, audited `--no-review`), and locked `join` registration. The
+   push gate is mechanically ENFORCED; the `bridge-post` primitive exists but normal
+   board posts aren't yet routed through it (README/SKILL/templates still describe
+   manual edit+bump — an adoption follow-up). **Still open:** identity binding —
+   until then `--self` is nominal, so the gate is auditable + hard but not anti-spoof
+   on its own (a determined author could self-certify as the peer). Identity binding is
+   the next trust slice.
 2. **`bridge-live` supervisor.** One command that joins, starts + restarts both
    board-wait and presence-keepalive, and reports a single liveness state — replacing
    "run two background scripts and remember to re-ARM". Onboard keepalive in `join`.
