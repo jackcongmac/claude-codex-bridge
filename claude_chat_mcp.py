@@ -66,16 +66,46 @@ def _resolve_claude():
 
 CLAUDE = _resolve_claude()
 
-GROUNDING = (
-    "You are the persistent Claude collaborator for the project in this working "
-    "directory, working alongside a Codex agent. You are being reached through the "
-    "ask_claude bridge (Codex -> you). If a shared board file 'collaboration.md' "
-    "exists in the working directory, read it before answering so you stay aligned "
-    "with the current task and decisions. You may read project files and make edits "
-    "(Read/Grep/Glob/Edit/Write); you do NOT run shell commands. Keep replies "
-    "concise and actionable, and write durable findings to collaboration.md when "
-    "that is the agreed channel."
-)
+def _find_board(cwd):
+    """Locate the collaboration board the way the bridge resolves a project root:
+    walk UP from cwd; return <dir>/.collab/collaboration.md if present, else a legacy
+    flat <dir>/collaboration.md; stop at a .git boundary (never bind to a PARENT
+    project's board) and at the filesystem root. Returns the path, or None.
+
+    (The wrapper is installed standalone and can't import bridge_common, so this
+    mirrors find_project_root's boundary in a few lines.)"""
+    d = os.path.abspath(cwd)
+    while True:
+        collab = os.path.join(d, ".collab", "collaboration.md")
+        if os.path.isfile(collab):
+            return collab
+        flat = os.path.join(d, "collaboration.md")
+        if os.path.isfile(flat):
+            return flat
+        if os.path.isdir(os.path.join(d, ".git")):
+            return None          # project root reached, no board here
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None          # filesystem root
+        d = parent
+
+
+def grounding(cwd):
+    """System prompt for a spawned Claude, pointing at the REAL board path (resolved
+    via _find_board) rather than assuming ./collaboration.md in cwd."""
+    base = (
+        "You are the persistent Claude collaborator for the project in this working "
+        "directory, working alongside a Codex agent, reached through the ask_claude "
+        "bridge (Codex -> you). You may read project files and make edits "
+        "(Read/Grep/Glob/Edit/Write); you do NOT run shell commands. Keep replies "
+        "concise and actionable."
+    )
+    board = _find_board(cwd)
+    if board:
+        return (base + " A shared collaboration board exists at %s — read it before "
+                "answering so you stay aligned with the current task and decisions, and "
+                "write durable findings there when that is the agreed channel." % board)
+    return base + " No shared collaboration board was found in this project; answer directly."
 
 
 def send(obj):
@@ -142,12 +172,12 @@ def _write_pinned(cwd, sid):
         pass
 
 
-def _base_cmd(prompt):
+def _base_cmd(prompt, cwd):
     return [
         CLAUDE, "-p", prompt,
         "--output-format", "json",
         "--strict-mcp-config", "--mcp-config", EMPTY_MCP,
-        "--append-system-prompt", GROUNDING,
+        "--append-system-prompt", grounding(cwd),
         "--permission-mode", "acceptEdits",
     ]
 
@@ -173,7 +203,7 @@ def call_claude(prompt, session_id=None, new_session=False):
     cwd = os.getcwd()
     target = session_id or (None if new_session else _read_pinned(cwd))
     fresh_id = None
-    cmd = _base_cmd(prompt)
+    cmd = _base_cmd(prompt, cwd)
     if target:
         cmd = cmd + ["--resume", target]
     else:
@@ -183,7 +213,7 @@ def call_claude(prompt, session_id=None, new_session=False):
     # If a resume failed (stale/missing session), retry once with a fresh session.
     if target and is_err and parsed:
         fresh_id = str(uuid.uuid4())
-        text, sid, is_err, parsed = _run(_base_cmd(prompt) + ["--session-id", fresh_id])
+        text, sid, is_err, parsed = _run(_base_cmd(prompt, cwd) + ["--session-id", fresh_id])
     final_sid = sid or fresh_id or target
     if final_sid and not session_id:
         _write_pinned(cwd, final_sid)
