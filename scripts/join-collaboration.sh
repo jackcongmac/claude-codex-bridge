@@ -74,7 +74,10 @@ cat <<EOF
 YOUR NEXT ACTIONS:
   1. Read the board to catch up:   cat "$BOARD"
   2. Announce yourself in your "## $SELF Outbox" + bump the signal.
-  3. ARM (run in the BACKGROUND so you wake on peer updates):
+  3. GO LIVE in one command (starts/reuses presence-keepalive so your liveness
+     stays honest, reports current liveness, and prints the board-wait ARM line):
+       $HERE/bridge-live.sh --self "$SELF" --project "$PROJECT"
+     then ARM board-wait in the BACKGROUND (its EXIT is how you wake on peer updates):
        $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
   4. When board-wait exits: if CHANGED, act + reply + bump signal + re-ARM;
      if TIMEOUT, just re-ARM. Never treat silence as "peer is done" — re-ARM.

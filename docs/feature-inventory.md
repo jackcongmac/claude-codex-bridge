@@ -41,7 +41,9 @@ Single-armer noclobber pidfile mutex.
 **Presence & liveness.** `_presence.py` heartbeat + departure broadcast;
 🌟 `presence-keepalive.sh` keeps `last_seen` fresh independent of board-wait (so a
 short window is honest); `bridge-liveness.sh` reports LIVE/PRESENT/STALE/DEAD/DEPARTED
-at a glance (`--watch`), read-only.
+at a glance (`--watch`), read-only; `bridge-live.sh` is the bounded go-live helper
+that registers the agent, starts the keepalive singleton, reports liveness, and
+prints the agent-owned `board-wait` ARM command.
 
 **🌟 Handshake — `bridge-handshake.sh` + `_handshake.py`.** Preflight (board / I'm
 armed / peer fresh / transport) + a live ping whose pong is written by the peer's
@@ -114,11 +116,12 @@ several were lived during development.
   desktop/web participation. `_surface.py` now *detects* surface and `clientInfo` is
   captured at the MCP layer, but there is still no wake abstraction (a collab-MCP
   server) and clientInfo is only logged.
-- **`join` doesn't onboard the full liveness model** — it prints only `board-wait`
-  as the ARM step, not `presence-keepalive`, so the newer liveness layer isn't
-  actually set up by joining.
-- **Being "fully live" takes multiple background procs** (board-wait +
-  presence-keepalive) with no single supervised "go live" command.
+- **`join` doesn't itself start keepalive** — by design it remains a printable
+  protocol join. `bridge-live.sh` now covers the practical go-live path by starting
+  `presence-keepalive` and printing the `board-wait` ARM command.
+- **`bridge-live` is intentionally not a board-wait supervisor** — `board-wait` exits
+  as the wake signal, so a separate supervisor must not swallow that signal. The
+  agent still has to run/re-arm the printed command after each turn.
 - **MCP-spawned agents are less board-aware than advertised.** `claude_chat_mcp.py`
   points spawned Claude at `collaboration.md` in the cwd, but `init` creates
   `.collab/collaboration.md` — the MCP path doesn't use `find_project_root`.
@@ -169,9 +172,11 @@ several were lived during development.
    until then `--self` is nominal, so the gate is auditable + hard but not anti-spoof
    on its own (a determined author could self-certify as the peer). Identity binding is
    the next trust slice.
-2. **`bridge-live` supervisor.** One command that joins, starts + restarts both
-   board-wait and presence-keepalive, and reports a single liveness state — replacing
-   "run two background scripts and remember to re-ARM". Onboard keepalive in `join`.
+2. ✅ **`bridge-live` go-live helper — bounded slice shipped.** One command
+   registers the agent, starts/reuses `presence-keepalive`, reports liveness, and
+   prints the exact `board-wait` ARM command. It does **not** supervise board-wait,
+   because board-wait's exit is the harness wake signal and must remain visible to
+   the agent.
 3. **Fix MCP board discovery.** Teach `claude_chat_mcp.py` to locate
    `.collab/collaboration.md` via the same root logic as `find_project_root`.
 4. **Liveness notify + revive.** On a DEAD/DEPARTED transition: OS + board notify

@@ -186,6 +186,18 @@ scripts/init-collaboration.sh           # into the current directory
 scripts/init-collaboration.sh /path/to/project
 ```
 
+For a joined agent window, bring the liveness side online with one command:
+
+```bash
+scripts/bridge-live.sh --self Codex --project .
+```
+
+`bridge-live` registers you on the board, starts one `presence-keepalive`
+process if needed, prints the current liveness report, and gives you the exact
+`board-wait` command to run in the background. It deliberately does not own
+`board-wait`: that one-shot watcher exits to wake the agent, so the agent must
+re-arm it after each turn.
+
 The loop:
 
 1. Each agent reads `collaboration_signal.json`; re-reads `collaboration.md` only

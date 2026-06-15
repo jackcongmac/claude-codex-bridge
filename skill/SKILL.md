@@ -164,6 +164,16 @@ The loop:
 3. Use the MCP bridge (`mcp__codex__codex` / `mcp__claude_chat__ask_claude`) to
    poke the other agent to take a turn.
 
+For full liveness in an interactive window, run:
+
+```bash
+scripts/bridge-live.sh --self <You> --project .
+```
+
+It registers you, starts the `presence-keepalive` singleton, reports liveness, and
+prints the `board-wait` ARM command. It intentionally does not own `board-wait`,
+because `board-wait` exits to wake the agent and must be re-armed after each turn.
+
 The Claude colleague is already told to read the board automatically.
 
 ## Resource-aware routing
