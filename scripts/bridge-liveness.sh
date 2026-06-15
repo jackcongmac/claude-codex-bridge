@@ -14,13 +14,15 @@
 #
 # Usage:
 #   bridge-liveness.sh [report] [--self S] [--project DIR] [--watch] [--interval N]
-#                      [--present-window SEC] [--stale-after SEC] [--json]
+#                      [--present-window SEC] [--stale-after SEC] [--json] [--notify]
 #
-# READ-ONLY. Notify-on-death and revive (side effects) are deferred to a separate
-# change pending the DESIGN_liveness.md review — this command never writes.
+# READ-ONLY by default. `--notify` (requires --self) OPTS IN to side effects: on each
+# pass it pages once when a peer TRANSITIONS into DEAD/DEPARTED (OS notify + a board
+# "## Liveness" note), debounced via _notify.py. Revive is a separate command
+# (bridge-revive.sh).
 set -euo pipefail
 
-SELF=""; PROJECT="$PWD"; WATCH=0; INTERVAL="${BRIDGE_LIVENESS_INTERVAL:-5}"; JSON=0
+SELF=""; PROJECT="$PWD"; WATCH=0; INTERVAL="${BRIDGE_LIVENESS_INTERVAL:-5}"; JSON=0; NOTIFY=0
 # Empty present-window = let _liveness default it to --stale-after (NO short STALE
 # tier): last_seen only ticks while board-wait is armed, so defaulting to a short
 # window would false-stale a busy/active agent (the bug shipped in e2c5f3d). A short
@@ -37,9 +39,13 @@ while [ $# -gt 0 ]; do
     --present-window) PRESENT_WINDOW="$2"; shift 2;;
     --stale-after) STALE_AFTER="$2"; shift 2;;
     --json) JSON=1; shift;;
+    --notify) NOTIFY=1; shift;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
+if [ "$NOTIFY" = "1" ] && [ -z "$SELF" ]; then
+  echo "[x] --notify requires --self <Me> (who is doing the detecting)" >&2; exit 2
+fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/bridge-paths.sh"
@@ -64,13 +70,23 @@ run_once() {
   fi
 }
 
+# Opt-in side effect: page once on a peer's transition into DEAD/DEPARTED (debounced).
+maybe_notify() {
+  [ "$NOTIFY" = "1" ] || return 0
+  # Send _notify's "NOTIFY ..." line to stderr so it never corrupts --json stdout.
+  "$PY3" "$HERE/_notify.py" tick --self "$SELF" --project "$PROJECT" \
+    $PW_OPT --stale-after "$STALE_AFTER" 1>&2 || true
+}
+
 if [ "$WATCH" = "1" ]; then
   while :; do
     clear 2>/dev/null || true
     date '+%Y-%m-%d %H:%M:%S %Z'
     run_once
+    maybe_notify
     sleep "$INTERVAL"
   done
 else
   run_once
+  maybe_notify
 fi
