@@ -69,6 +69,34 @@ def heartbeat(project, self_name):
         bc.release_lock(lock_p)
 
 
+def register(project, self_name, role="peer", wait=10.0):
+    """Locked idempotent JOIN registration: set role + last_seen + departed=False
+    (add joined_at for a new member). Under collaboration.lock so concurrent joins —
+    or overlap with a locked presence/departure write — can't lose participant state.
+    Returns True, or False if the lock couldn't be taken within `wait`."""
+    P = bc.collab_paths(project)
+    parts_p = P["participants"]
+    lock_p = P["lock"]
+    now_s = bc.now_str()
+    if not bc.acquire_lock(lock_p, "register-%s" % self_name, ttl=30, wait=wait):
+        return False
+    try:
+        reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
+        mine = next((a for a in reg["participants"] if a.get("name") == self_name), None)
+        if mine is None:
+            reg["participants"].append({"name": self_name, "role": role,
+                                        "joined_at": now_s, "last_seen": now_s,
+                                        "departed": False})
+        else:
+            mine["role"] = role
+            mine["last_seen"] = now_s
+            mine["departed"] = False
+        bc.atomic_write_json(parts_p, reg)
+        return True
+    finally:
+        bc.release_lock(lock_p)
+
+
 def tick(project, self_name, stale_after):
     P = bc.collab_paths(project)
     parts_p = P["participants"]
@@ -128,6 +156,11 @@ def main():
     h = sub.add_parser("heartbeat")
     h.add_argument("--self", dest="self_name", required=True)
     h.add_argument("--project", default=None)
+    rg = sub.add_parser("register")
+    rg.add_argument("--self", dest="self_name", required=True)
+    rg.add_argument("--role", default="peer")
+    rg.add_argument("--project", default=None)
+    rg.add_argument("--wait", type=float, default=10.0)
     a = ap.parse_args()
     proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
     if a.cmd == "tick":
@@ -135,6 +168,10 @@ def main():
             print("DEPARTED %s" % name)
     elif a.cmd == "heartbeat":
         heartbeat(proj, a.self_name)
+    elif a.cmd == "register":
+        if not register(proj, a.self_name, a.role, a.wait):
+            print("LOCKBUSY", file=sys.stderr)
+            sys.exit(3)
 
 
 if __name__ == "__main__":

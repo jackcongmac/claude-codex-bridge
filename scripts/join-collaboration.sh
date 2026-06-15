@@ -35,26 +35,12 @@ if [ ! -f "$BOARD" ] || [ ! -f "$SIGNAL" ]; then
   exit 1
 fi
 
-# Register in participants.json (presence + role + last_seen), idempotent by name.
-SELF="$SELF" ROLE="$ROLE" COLLAB="$COLLAB" "$PY3" - <<'PY'
-import json, os, time
-p = os.path.join(os.environ["COLLAB"], "collaboration_participants.json")
-try:
-    reg = json.load(open(p))
-except Exception:
-    reg = {"participants": []}
-name, role = os.environ["SELF"], os.environ["ROLE"]
-now = time.strftime("%Y-%m-%d %H:%M:%S %Z")
-found = False
-for a in reg["participants"]:
-    if a.get("name") == name:
-        a["role"] = role; a["last_seen"] = now; a["departed"] = False; found = True
-if not found:
-    reg["participants"].append({"name": name, "role": role, "joined_at": now, "last_seen": now, "departed": False})
-tmp = p + ".tmp"
-json.dump(reg, open(tmp, "w"), ensure_ascii=False, indent=2)
-os.replace(tmp, p)
-PY
+# Register in participants.json (presence + role + last_seen) — LOCKED + idempotent
+# (a lock-free write could lose a concurrent join or clobber a presence/departure write).
+if ! "$PY3" "$HERE/_presence.py" register --self "$SELF" --role "$ROLE" --project "$PROJECT"; then
+  echo "[x] could not register on the board (collaboration lock busy?) — retry in a moment." >&2
+  exit 1
+fi
 
 cat <<EOF
 
