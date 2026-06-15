@@ -17,12 +17,55 @@
 # script stops and leaves the rebase for you to resolve.
 set -euo pipefail
 
-WHO="${1:-${BRIDGE_AGENT:-unknown}}"
+WHO=""; NO_REVIEW=0
+for a in "$@"; do
+  case "$a" in
+    --no-review) NO_REVIEW=1;;
+    --*) echo "unknown arg: $a" >&2; exit 2;;
+    *) [ -z "$WHO" ] && WHO="$a";;
+  esac
+done
+WHO="${WHO:-${BRIDGE_AGENT:-unknown}}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(git rev-parse --show-toplevel)"
 LOCK="$REPO/.bridge_push.lock"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 TTL="${BRIDGE_PUSH_TTL:-180}"          # seconds before a held lock is considered stale
 WAIT_MAX="${BRIDGE_PUSH_WAIT:-120}"    # seconds to wait for a peer's push before giving up
+
+# --- review gate: refuse to push a commit no PEER has approved ----------------
+# Only when this repo runs a collaboration board; a plain repo is never gated. The
+# gate checks the CURRENT HEAD (the commit the author got reviewed) BEFORE the rebase
+# below rewrites SHAs. Default hard-reject; --no-review bypasses with an audit entry.
+# A repo is collaboration-enabled if it has a .collab/ dir or a legacy board marker;
+# fail CLOSED (gate ON) whenever any board marker is present. The gate is always on
+# for such repos — the ONLY escape is the audited --no-review (no silent env switch).
+# Match bridge_common.collab_paths' flat markers so a legacy board repo isn't skipped.
+board_present() {
+  [ -d "$REPO/.collab" ] \
+    || [ -f "$REPO/collaboration.md" ] || [ -f "$REPO/collaboration_signal.json" ] \
+    || [ -f "$REPO/collaboration_state.json" ] || [ -f "$REPO/collaboration_queue.json" ]
+}
+HEAD_SHA=""
+if board_present; then
+  HEAD_SHA="$(git rev-parse HEAD)"
+  if [ "$NO_REVIEW" = "1" ]; then
+    echo "[!] --no-review: bypassing the review gate for $HEAD_SHA (recording an audit entry)."
+    # The audit entry IS the accountability for a bypass — if it can't be written,
+    # refuse rather than push unaudited.
+    if ! python3 "$HERE/_review.py" record --self "$WHO" --sha "$HEAD_SHA" \
+         --verdict BYPASS --bypass --note "push --no-review" --project "$REPO"; then
+      echo "[x] --no-review: could not WRITE the audit entry (lock busy?) — refusing to push unaudited." >&2
+      exit 5
+    fi
+  elif ! python3 "$HERE/_review.py" check --sha "$HEAD_SHA" --exclude "$WHO" --project "$REPO" >/dev/null 2>&1; then
+    echo "[x] review gate: HEAD $HEAD_SHA has no SHIP/GO recorded by a peer (not '$WHO')." >&2
+    echo "    Record a peer review, then re-push:" >&2
+    echo "      $HERE/bridge-review.sh --self <peer> --sha $HEAD_SHA --verdict SHIP" >&2
+    echo "    Or bypass (audited):  $HERE/bridge-push.sh $WHO --no-review" >&2
+    exit 4
+  fi
+fi
 
 now() { date +%s; }
 jget() { _L="$LOCK" _K="$1" python3 -c "import json,os;print(json.load(open(os.environ['_L']))[os.environ['_K']])" 2>/dev/null || echo "$2"; }
@@ -71,5 +114,17 @@ while [ -d "$(git rev-parse --git-path rebase-merge 2>/dev/null)" ] || \
   tries=$(( tries + 1 )); [ "$tries" -gt 50 ] && { echo "[x] rebase stuck; resolve manually." >&2; exit 3; }
   GIT_EDITOR=true git rebase --continue >/dev/null 2>&1 || git rebase --skip >/dev/null 2>&1 || break
 done
+# The rebase above may have rewritten HEAD. Tie the actually-pushed SHA back to the
+# gate-approved one in the ledger so an auditor can trace what shipped on what review.
+if [ -n "$HEAD_SHA" ]; then
+  PUSH_SHA="$(git rev-parse HEAD)"
+  if [ "$PUSH_SHA" != "$HEAD_SHA" ]; then
+    if ! python3 "$HERE/_review.py" record --self "$WHO" --sha "$PUSH_SHA" --verdict PUSHED \
+         --bypass --note "rebased from gate-approved $HEAD_SHA" --project "$REPO"; then
+      echo "[x] could not record the pushed-SHA audit trace (lock busy?) — refusing to push untraceable." >&2
+      exit 5
+    fi
+  fi
+fi
 git push origin "$BRANCH"
 echo "[ok] pushed '$BRANCH'. Lock released."

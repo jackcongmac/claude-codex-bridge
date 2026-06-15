@@ -75,6 +75,7 @@ def collab_paths(root):
         "state": os.path.join(base, "collaboration_state.json"),
         "queue": os.path.join(base, "collaboration_queue.json"),
         "participants": os.path.join(base, "collaboration_participants.json"),
+        "reviews": os.path.join(base, "collaboration_reviews.json"),
         "log": os.path.join(base, "collaboration_auto.log"),
         "archive": os.path.join(base, "collaboration_archive"),
         "lock": os.path.join(base, "collaboration.lock"),
