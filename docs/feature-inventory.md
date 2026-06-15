@@ -184,3 +184,26 @@ several were lived during development.
    `.bridge_push.lock` (which today breaks on TTL alone, so a long live push can be
    broken after `BRIDGE_PUSH_TTL`). Plus a real two-window / MCP-transport E2E test
    and a `bridge-doctor` repair command.
+8. **Agent-bootstrapped peers (exploration).** Today a human opens BOTH agents in two
+   windows; everything (handshake, all skills) runs in the CLI. The vision: one agent
+   stands up its partner and they auto-handshake — no second human action. Two
+   sub-cases with very different feasibility:
+   - **CLI→CLI (feasible, near-ish).** A one-command "spawn-peer" would COMPOSE the
+     pieces — register the peer (`join-collaboration.sh`), start its autonomous
+     watcher (`watch-collaboration.sh` / `_auto_turn.py`, which do headless
+     auto-react but do NOT themselves join, arm `board-wait`, or handshake), and
+     either also arm `board-wait` or adapt the handshake (today `bridge-handshake.sh`
+     checks `board-wait` pidfiles before GO). The launch is the easy part; the real
+     constraints are (a) the spawned peer must be a persistent reactive loop, and (b)
+     letting an agent auto-spawn another agent that can edit files is a genuine
+     privilege escalation — it MUST be gated with the autonomous-mode safety model
+     (read-only by default + explicit `--allow-write`, role narrowing, `max_turns`;
+     note Codex dollar spend isn't enforceable, only turn-bounded).
+   - **CLI→Desktop app (blocked on platform).** An agent can launch the other's
+     desktop app (e.g. `open -a Codex`), but a GUI app won't autonomously join / arm /
+     handshake — it waits for human input and can't act on board events without a
+     human (the desktop-autonomy wall, see item 6). "Claude opens the Codex desktop
+     and they auto-handshake" therefore needs BOTH the collab-MCP-server (item 6) AND
+     the desktop runtime being able to act on an incoming notification without a human
+     — not available today; until then this path stays human-in-the-loop. (Symmetric
+     for Codex→Claude.)
