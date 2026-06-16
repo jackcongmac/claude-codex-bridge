@@ -122,9 +122,9 @@ several were lived during development.
 - **`bridge-live` is intentionally not a board-wait supervisor** — `board-wait` exits
   as the wake signal, so a separate supervisor must not swallow that signal. The
   agent still has to run/re-arm the printed command after each turn.
-- **MCP-spawned agents are less board-aware than advertised.** `claude_chat_mcp.py`
-  points spawned Claude at `collaboration.md` in the cwd, but `init` creates
-  `.collab/collaboration.md` — the MCP path doesn't use `find_project_root`.
+- ✅ **MCP board discovery — fixed (roadmap #3).** `claude_chat_mcp.py` now resolves
+  the real `.collab/collaboration.md` via `_find_board` (walks up like
+  `find_project_root`), instead of assuming `./collaboration.md` in cwd.
 - **MCP-spawn vs armed-window is an intrinsic footgun** (a one-off call spawns a
   throwaway, not the collaborating window).
 
@@ -132,10 +132,11 @@ several were lived during development.
 - liveness can't distinguish "window open but agent hung/idle" from "actively
   working" (keepalive proves the keepalive *process* is alive, not agent
   responsiveness).
-- notify-on-death / revive are designed but not built; `bridge-liveness.sh` is
-  read-only by design. (Note: a generic `notify()` exists and is used in the
-  autonomous path — the gap is liveness-specific.)
-- Reactivity depends on the agent reliably re-ARMing; no supervisor guarantees it.
+- ✅ notify + revive shipped (roadmap #4): `bridge-liveness.sh --notify` pages once
+  on a DEAD/DEPARTED transition; `bridge-revive.sh` re-ensures self + nudges a down
+  peer. Plain report/`--watch` stay read-only.
+- Reactivity depends on the agent reliably re-ARMing; no supervisor guarantees it
+  (`bridge-live` reduces the footprint but board-wait re-arm is still the agent's job).
 
 **Scale & environment**
 - **Single-machine / shared-filesystem.** `.collab` is local files; cross-machine
@@ -152,15 +153,39 @@ several were lived during development.
   caught by review, not a test). There are solid unit/integration tests (handshake,
   board-wait, keepalive, liveness, surface, version), but **no real MCP-transport
   E2E and no true two-window agent test**.
-- **No "doctor"/repair command** for half-broken state (stale locks, dead
-  board-wait, lingering pidfiles).
-- **Update tooling + an npm package exist; publishing + auto-update don't yet.**
-  `bridge-update` + version-check + a symlinked wrapper, and now an npm package
-  (`package.json` + `bin/claude-codex-bridge`, verified via `npm pack`) — but it is
-  NOT published yet (needs the maintainer's npm account), there's no auto-update, and
-  `join` only *tells* the user to run the version check (doesn't run it).
+- ✅ **`bridge-doctor` shipped (roadmap #7)** — diagnoses/repairs stale locks
+  (this-host only), dead pidfiles, and departed-but-present participants.
+- **Published to npm, but no auto-update yet.** `@jackcongus/claude-codex-bridge@0.8.0`
+  is live (`bridge-update` + version-check + symlinked wrapper underneath) — but there's
+  no auto-update, no Claude Code plugin-marketplace listing yet, and `join` only *tells*
+  the user to run the version check (doesn't run it).
 - **Docs/mode sprawl** (manual / autonomous / queue, many `DESIGN_*.md`) raises
   onboarding cost.
+
+## Strategic direction — be transport-agnostic; hold the governance layer
+
+The space is active: several Claude↔Codex bridges already exist (e.g.
+[codex-claude-bridge](https://github.com/abhishekgahlot2/codex-claude-bridge),
+AgentBridge), bigger orchestrators (AWS
+[cli-agent-orchestrator](https://github.com/awslabs/cli-agent-orchestrator)), and —
+crucially — Anthropic shipped [**Channels**](https://code.claude.com/docs/en/channels)
+(Mar 2026, research preview): an MCP server that PUSHES events into a *running* Claude
+Code session so the agent reacts without a human at the keyboard. Channels is, in
+effect, an official wake primitive analogous to our board-wait+harness hack, and an
+official Claude↔Codex live bridge is being tracked (claude-code #36871 / codex #15359).
+
+Implication: **transport + wake are commoditizing / going official.** Our durable value
+is the layer ABOVE them — the coordination + governance harness (shared board, locks,
+the review-gate, presence/liveness, doctor, the dual-review protocol) that makes two
+agents collaborate *safely*, not merely talk (the shared board, locks, the peer-review
+gate, presence/liveness, doctor). Most transport bridges don't have it.
+
+So the direction: **don't compete on transport/wake — be transport-AGNOSTIC.** The
+coordination layer should ride on whatever wake exists underneath (board-wait today,
+Channels when available, MCP-spawn for one-offs) and stay the constant on top. Caveats
+to verify: Channels is Claude-Code (not confirmed for Claude Desktop), Anthropic-only
+(Codex needs its own push), and only wakes an already-open session. One-liner:
+*others are solving "let two agents talk"; we solve "let them work together safely."*
 
 ## Roadmap (prioritized)
 
@@ -185,19 +210,23 @@ several were lived during development.
    `_notify.py`) pages once on a peer's transition into DEAD/DEPARTED (OS + a "##
    Liveness" board note, debounced, quiet bootstrap/recovery); `bridge-revive.sh`
    re-ensures self and nudges a down peer + notifies the human (no MCP-spawn).
-5. **Distribution — package BUILT, publish pending.** An npm single package
-   (`package.json` + `bin/claude-codex-bridge`; `npm pack` ships both halves, excludes
-   tests/.collab) is ready; `npm publish` needs the maintainer's npm account (outward,
-   not done autonomously). Claude Code plugin marketplace later for the Claude half.
-   Still to do: have `join`/handshake actually RUN the version check, not just mention it.
-6. **Cross-surface (collab-MCP-server).** Pull the coordination layer behind one
-   local MCP server any client (CLI or desktop) connects to; presence = MCP
-   connection liveness; wake via MCP notifications. Makes the bridge surface-agnostic.
-7. **Cross-machine + test depth.** Host/pid-aware stale-breaking for ALL locks —
-   `collaboration.lock`, the board-wait/keepalive pidfile mutexes, AND
-   `.bridge_push.lock` (which today breaks on TTL alone, so a long live push can be
-   broken after `BRIDGE_PUSH_TTL`). Plus a real two-window / MCP-transport E2E test
-   and a `bridge-doctor` repair command.
+5. ✅ **Distribution — PUBLISHED to npm.** `@jackcongus/claude-codex-bridge@0.8.0`
+   (`npm i -g @jackcongus/claude-codex-bridge` → `claude-codex-bridge install`; scoped
+   because the unscoped name is taken). Still to do: Claude Code plugin marketplace for
+   the Claude half; have `join`/handshake actually RUN the version check (not just mention).
+6. **Cross-surface (collab-MCP-server) — transport-agnostic (see Strategic direction).**
+   Pull the coordination layer behind one local MCP server any client (CLI or desktop)
+   connects to; presence = MCP connection liveness. For WAKE, ride whatever exists:
+   board-wait today, **Claude Code Channels** (the official push-into-a-running-session
+   primitive) when available, MCP-spawn for one-offs — the coordination layer stays the
+   constant on top. This is what would let a Claude Code session self-wake on board
+   events (and a desktop agent too, IF/when Channels extends to Claude Desktop —
+   unconfirmed; see the caveats above).
+7. **Cross-machine + test depth** (`bridge-doctor` repair command ✅ shipped). Still:
+   host/pid-aware stale-breaking baked into ALL lock acquisition — `collaboration.lock`,
+   the board-wait/keepalive pidfile mutexes, AND `.bridge_push.lock` (which today breaks
+   on TTL alone, so a long live push can be broken after `BRIDGE_PUSH_TTL`). Plus a real
+   two-window / MCP-transport E2E test.
 8. **Agent-bootstrapped peers (exploration).** Today a human opens BOTH agents in two
    windows; everything (handshake, all skills) runs in the CLI. The vision: one agent
    stands up its partner and they auto-handshake — no second human action. Two
