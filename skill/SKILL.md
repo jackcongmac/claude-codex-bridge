@@ -85,6 +85,25 @@ this project reads the root `AGENTS.md`/`CLAUDE.md` and joins.
    hand real work to the peer — or tell the user it's collaborating — until a
    handshake (or a fresh peer reaction this session) confirms the channel is live.
 
+## Open the group chat (trigger: "群聊" / "group chat")
+
+When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open group chat"**
+(or clearly asks for the shared chat room), LAUNCH the web group chat:
+
+1. Resolve the bridge scripts dir (first line of `~/.claude-codex-bridge/scripts_path`),
+   and the project root (it needs a `.collab/` board — offer to init one if absent).
+2. Run it in the background:
+   `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
+   It serves a local window and opens the browser at `http://127.0.0.1:8765`.
+3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
+   mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
+   no `@` = nobody auto-replies. Close with the **✕** top-right — that **archives the
+   session** to `<root>/.collab/chat_archive/chat-<time>.md` and clears the live thread
+   for next time.
+
+It is one SESSION per window. Each close archives the full transcript (so past chats are
+never lost) and starts the next session fresh.
+
 ## Using the bridge once set up
 
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,

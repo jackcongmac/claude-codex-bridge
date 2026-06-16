@@ -20,7 +20,10 @@ import threading
 import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bridge_common import collab_paths, find_project_root, read_section  # noqa: E402
+from bridge_common import (  # noqa: E402
+    collab_paths, find_project_root, read_section, read_json, atomic_write,
+    atomic_write_json, now_str, acquire_lock, release_lock,
+)
 from _post import post as _board_post  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
@@ -62,6 +65,55 @@ def mentions(text):
     if re.search(r'(?<![\w@])@codex\b', t, re.I):
         who.add("Codex")
     return who
+
+
+def archive_and_clear_chat(project):
+    """On close: archive the ## Chat thread to .collab/chat_archive/chat-<time>.md and
+    clear the live thread (under the lock), so past sessions aren't lost and the next
+    one starts fresh. Returns the archive path, or None if the chat was empty."""
+    p = collab_paths(find_project_root(project))
+    if not acquire_lock(p["lock"], "chat-archive-%d" % os.getpid(), ttl=30, wait=10):
+        return None
+    try:
+        try:
+            with open(p["board"]) as f:
+                text = f.read()
+        except OSError:
+            text = ""
+        # extract the EXACT "## Chat" section (anchored header — not "## Chat Archive")
+        hdr = re.search(r'(?m)^## Chat[ \t]*$', text)
+        if not hdr:
+            return None
+        i = hdr.start()
+        j = text.find("\n## ", i + len("## Chat"))
+        section = text[i:] if j == -1 else text[i:j]
+        msgs = parse_chat(section)
+        if not msgs:
+            return None
+
+        archive_dir = os.path.join(p["dir"], "chat_archive")
+        os.makedirs(archive_dir, exist_ok=True)
+        stamp = now_str()[:19].replace(":", "").replace(" ", "-")
+        path = os.path.join(archive_dir, "chat-%s.md" % stamp)
+        body = ["# Chat — archived %s\n" % now_str()]
+        for m in msgs:
+            body.append("**%s** (%s):\n%s\n" % (m["speaker"], m["ts"], m["text"]))
+        atomic_write(path, "\n".join(body))
+
+        # remove the ## Chat section from the board (keep all other sections)
+        start = text.rfind("\n", 0, i)
+        start = i if start == -1 else start
+        text = text[:start].rstrip() + ("\n" + text[j + 1:] if j != -1 else "\n")
+        atomic_write(p["board"], text)
+
+        sig = read_json(p["signal"], default={}) or {}
+        atomic_write_json(p["signal"], {
+            "update_id": int(sig.get("update_id", 0)) + 1, "updated_at": now_str(),
+            "updated_by": "chat", "changed_section": "Chat",
+            "summary": "chat session archived (%d messages) -> %s" % (len(msgs), path)})
+        return path
+    finally:
+        release_lock(p["lock"])
 
 
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>群聊</title><style>
@@ -110,8 +162,10 @@ async function send(){const t=document.getElementById('msg');const v=t.value;if(
   load();}
 document.getElementById('send').onclick=send;
 document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
-document.getElementById('close').onclick=async()=>{try{await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});}catch(e){}
-  document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">群聊已关闭,可以关掉这个标签页。</p>';};
+document.getElementById('close').onclick=async()=>{let p=null;
+  try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});p=(await r.json()).archived;}catch(e){}
+  document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">群聊已关闭。<span id=ar></span><br>可以关掉这个标签页。</p>';
+  if(p)document.getElementById('ar').textContent=' 本次记录已存到:'+p;};
 load();setInterval(load,1500);
 </script></body></html>"""
 
@@ -172,7 +226,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if self._bad_token():
                 self._send(403, json.dumps({"ok": False}))
                 return
-            self._send(200, json.dumps({"ok": True}))
+            try:
+                archived = archive_and_clear_chat(self.server.project)
+            except Exception:
+                archived = None
+            self._send(200, json.dumps({"ok": True, "archived": archived}))
             threading.Thread(target=self.server.shutdown, daemon=True).start()
         else:
             self._send(404, "{}")
