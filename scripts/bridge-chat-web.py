@@ -45,6 +45,25 @@ def parse_chat(section):
     return msgs
 
 
+def mentions(text):
+    """Parse @-mentions → the set of agents that must respond (the loop control):
+    @All / @所有人 → both; @Claude (also '@Claude Code') / @Codex → that one; none →
+    empty (nobody auto-replies)."""
+    # Real @-mentions only: the @ must NOT be inside a word/email (lookbehind), the name
+    # must end at a boundary (\b / not a CJK char) — so "a@codex.io", "@clauded",
+    # "@codexical", "@所有人类" are NOT mentions.
+    t = text or ""
+    if (re.search(r'(?<![\w@])@all\b', t, re.I)
+            or re.search(r'(?<![\w@])@所有人(?![一-鿿])', t)):
+        return {"Claude", "Codex"}
+    who = set()
+    if re.search(r'(?<![\w@])@claude\b', t, re.I):
+        who.add("Claude")
+    if re.search(r'(?<![\w@])@codex\b', t, re.I):
+        who.add("Codex")
+    return who
+
+
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>群聊</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
@@ -54,15 +73,27 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-cont
 .who{font-size:11px;color:#888;margin:0 8px 2px}
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
 .me .bubble{background:#95ec69}
-footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd}
+footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;position:relative}
+#at{position:absolute;bottom:100%;left:8px;margin-bottom:4px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;z-index:10;min-width:140px}
+#at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}
 #msg{flex:1;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:15px}
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
 </style></head><body>
 <header><b>群聊 · __SELF__</b><span id=close title=关闭>✕</span></header>
 <div id=log></div>
-<footer><input id=msg placeholder="说点什么…" autofocus><button id=send>发送</button></footer>
+<footer><div id=at></div><input id=msg placeholder="说点什么…(打 @ 选人)" autofocus><button id=send>发送</button></footer>
 <script>
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
+const msg=document.getElementById('msg'),AT=document.getElementById('at');
+const PEOPLE=[['Claude','@Claude '],['Codex','@Codex '],['所有人','@All ']];
+function showAt(){const m=msg.value.match(/@(\\S*)$/);
+  if(!m){AT.style.display='none';return;}
+  AT.innerHTML=PEOPLE.map((p,i)=>`<div data-i=${i}>@${p[0]}</div>`).join('');
+  AT.style.display='block';}
+AT.addEventListener('mousedown',e=>{const d=e.target.closest('div[data-i]');if(!d)return;e.preventDefault();
+  msg.value=msg.value.replace(/@\\S*$/,PEOPLE[+d.dataset.i][1]);AT.style.display='none';msg.focus();});
+msg.addEventListener('input',showAt);
+msg.addEventListener('blur',()=>setTimeout(()=>{AT.style.display='none';},150));
 async function load(){
   let ms; try{ms=await (await fetch('/messages')).json();}catch(e){return;}
   const log=document.getElementById('log');
