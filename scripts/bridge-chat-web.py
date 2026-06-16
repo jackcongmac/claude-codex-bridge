@@ -15,6 +15,8 @@ import json
 import os
 import re
 import secrets
+import signal
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -236,6 +238,60 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send(404, "{}")
 
 
+def responder_cmds(scripts_dir, project):
+    """The two background commands that make the room live: one chat auto-responder
+    per agent. Their own single-instance mutex makes a duplicate launch a quiet no-op."""
+    sh = os.path.join(scripts_dir, "bridge-chat-respond.sh")
+    return [[sh, "--self", who, "--project", project] for who in ("Claude", "Codex")]
+
+
+def start_responders(project, scripts_dir=None, spawn=None):
+    """Spawn the Claude/Codex chat responders in the background. Returns their handles.
+    Each runs in its OWN session (start_new_session) so we can later signal the whole
+    process tree — the shell loop, its python pass, AND the spawned claude/codex — not
+    just the wrapper. `spawn` is injectable for testing."""
+    scripts_dir = scripts_dir or os.path.dirname(os.path.abspath(__file__))
+    spawn = spawn or (lambda cmd: subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True))
+    return [spawn(cmd) for cmd in responder_cmds(scripts_dir, project)]
+
+
+def _kill_tree(h):
+    """SIGTERM the responder's whole process group (a bare terminate() would leave the
+    spawned claude/codex running and delay the shell's cleanup trap); SIGKILL the group
+    if it doesn't exit promptly. Handles without a real pid fall back to terminate()."""
+    pid = getattr(h, "pid", None)
+    if not pid:
+        h.terminate()
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except OSError:                       # not a group leader / already gone
+        try:
+            h.terminate()
+        except Exception:
+            pass
+        return
+    try:
+        h.wait(timeout=3)
+    except Exception:
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def stop_responders(handles, kill=None):
+    """Best-effort stop every responder tree; one that's already gone must not stop us
+    from stopping the rest."""
+    kill = kill or _kill_tree
+    for h in handles or []:
+        try:
+            kill(h)
+        except Exception:
+            pass
+
+
 def make_server(project, self_name, port):
     httpd = http.server.HTTPServer(("127.0.0.1", port), _Handler)
     httpd.project = find_project_root(project)
@@ -250,10 +306,15 @@ def main():
     ap.add_argument("--project", default=None)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--no-responders", action="store_true",
+                    help="don't auto-start the Claude/Codex chat responders")
     a = ap.parse_args()
     httpd, port = make_server(a.project, a.self_name, a.port)
     url = "http://127.0.0.1:%d" % port
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
+    responders = [] if a.no_responders else start_responders(httpd.project)
+    if responders:
+        print("已自动拉起 Claude / Codex 自动应答器:@ 谁谁就回(@All 两个都回)。")
     if not a.no_open:
         try:
             webbrowser.open(url)
@@ -263,6 +324,8 @@ def main():
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        stop_responders(responders)
     return 0
 
 

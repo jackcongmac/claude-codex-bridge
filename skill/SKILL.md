@@ -94,12 +94,16 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    and the project root (it needs a `.collab/` board — offer to init one if absent).
 2. Run it in the background:
    `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
-   It serves a local window and opens the browser at `http://127.0.0.1:8765`.
+   It serves a local window, opens the browser at `http://127.0.0.1:8765`, and
+   **auto-starts the Claude + Codex chat responders** so the room is live immediately
+   (each responder spawns its agent to reply when @-mentioned). Closing the server
+   stops them. Pass `--no-responders` to launch the window only.
 3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
-   no `@` = nobody auto-replies. Close with the **✕** top-right — that **archives the
-   session** to `<root>/.collab/chat_archive/chat-<time>.md` and clears the live thread
-   for next time.
+   no `@` = nobody auto-replies. Agents can @ each other too (a consecutive-agent-turn
+   cap, default 6, breaks ping-pong until a human posts). Close with the **✕** top-right
+   — that **archives the session** to `<root>/.collab/chat_archive/chat-<time>.md` and
+   clears the live thread for next time.
 
 It is one SESSION per window. Each close archives the full transcript (so past chats are
 never lost) and starts the next session fresh.

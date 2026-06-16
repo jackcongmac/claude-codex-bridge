@@ -64,6 +64,78 @@ class ChatArchiveTests(unittest.TestCase):
         self.assertIsNone(cw.archive_and_clear_chat(self.tmp))
 
 
+class ResponderLaunchTests(unittest.TestCase):
+    """Launching the group chat auto-starts the Claude/Codex responders, so the room is
+    live the moment it opens; closing it stops them."""
+
+    def test_responder_cmds_target_both_agents(self):
+        cmds = cw.responder_cmds("/scripts", "/proj")
+        selves = sorted(c[c.index("--self") + 1] for c in cmds)
+        self.assertEqual(selves, ["Claude", "Codex"])
+        for c in cmds:
+            self.assertTrue(c[0].endswith("bridge-chat-respond.sh"))
+            self.assertIn("/proj", c)
+
+    def test_start_responders_spawns_each(self):
+        seen = []
+        handles = cw.start_responders("/proj", scripts_dir="/s",
+                                      spawn=lambda cmd: seen.append(cmd) or object())
+        self.assertEqual(len(seen), 2)
+        self.assertEqual(len(handles), 2)
+
+    def test_default_spawn_isolates_process_group(self):
+        captured = {}
+
+        class Fake:
+            def __init__(self, *a, **k):
+                captured.update(k)
+                self.pid = 4242
+
+        orig = cw.subprocess.Popen
+        cw.subprocess.Popen = Fake
+        try:
+            cw.start_responders("/proj", scripts_dir="/s")
+        finally:
+            cw.subprocess.Popen = orig
+        self.assertTrue(captured.get("start_new_session"))   # own session => killable tree
+
+    def test_kill_tree_kills_the_whole_process_group(self):
+        import os
+        import signal
+        import subprocess
+        import time
+        # session leader (sh) that spawns a child sleep; killing the GROUP must reap both.
+        p = subprocess.Popen(["sh", "-c", "sleep 30 & echo $! && wait"],
+                             stdout=subprocess.PIPE, start_new_session=True)
+        child = int(p.stdout.readline().strip())
+        self.assertEqual(os.kill(child, 0), None)            # child alive
+        cw.stop_responders([p])
+        time.sleep(0.3)
+        with self.assertRaises(ProcessLookupError):          # child reaped via the group
+            os.kill(child, 0)
+        try:
+            p.wait(timeout=2)                                # reap the sh leader (no warning)
+        except Exception:
+            pass
+        if p.stdout:
+            p.stdout.close()
+
+    def test_stop_responders_terminates_all_even_if_one_raises(self):
+        class H:
+            def __init__(self, boom=False):
+                self.killed = False
+                self.boom = boom
+
+            def terminate(self):
+                if self.boom:
+                    raise RuntimeError("already dead")
+                self.killed = True
+
+        ok, boom = H(), H(boom=True)
+        cw.stop_responders([boom, ok])      # must not raise; must keep going
+        self.assertTrue(ok.killed)
+
+
 class SkillTriggerTests(unittest.TestCase):
     def test_skill_documents_the_group_chat_trigger(self):
         text = (ROOT / "skill" / "SKILL.md").read_text()
