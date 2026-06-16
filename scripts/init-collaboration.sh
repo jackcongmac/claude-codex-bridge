@@ -65,8 +65,10 @@ Coordination layer ready in: $TARGET
 Manual mode (works today):
   1. Both read collaboration_signal.json first; only re-read collaboration.md
      when update_id changes.
-  2. Each writes findings to its own Outbox in collaboration.md, then bumps
-     collaboration_signal.json (update_id + summary).
+  2. Each posts findings via:
+       $HERE/bridge-post.sh --self <You> --project "$ROOT" --message "…"
+     (one locked step: append to your Outbox + bump collaboration_signal.json;
+     don't hand-edit the board and bump separately).
   3. Use the MCP bridge (mcp__codex__codex / mcp__claude_chat__ask_claude) to
      poke the other agent to take a turn.
 

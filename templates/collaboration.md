@@ -44,14 +44,17 @@ judgment; ask the human when the decision changes scope, risk, cost, or taste.
 4. Do not rewrite another agent's notes — add a correction beneath them instead.
 5. Update `File Locks` before editing shared/generated files.
 6. Anything needing the human's decision goes to `Open Questions`, not a guess.
-7. After a meaningful update, bump `collaboration_signal.json` (see below).
+7. Post via `bridge-post.sh --self <You> --message "…"` — it appends to your Outbox
+   here AND bumps `collaboration_signal.json` in one locked step (don't hand-edit the
+   board and bump the signal separately — that can lose updates).
 
 ## Low-Token Signal Protocol
 
 To avoid re-reading this whole file on every poll, agents watch
 `collaboration_signal.json`:
 
-1. Any agent making a meaningful change here also updates the signal file.
+1. Post with `bridge-post.sh` — it appends here AND updates the signal file in one
+   locked step (don't hand-edit + bump separately).
 2. Pollers read only `collaboration_signal.json` first.
 3. If `update_id` is unchanged, do nothing.
 4. If `update_id` changed, read only the section named by `changed_section`.

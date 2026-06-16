@@ -159,8 +159,10 @@ locks, decision log) and `.collab/collaboration_signal.json` (low-token change s
 The loop:
 1. Each agent reads `.collab/collaboration_signal.json` first; re-reads the board
    only when `update_id` changed.
-2. Each writes status/findings to its own outbox in `.collab/collaboration.md`, then
-   bumps `.collab/collaboration_signal.json` (`update_id` + one-line `summary`).
+2. Each posts status/findings to its own outbox via
+   `scripts/bridge-post.sh --self <You> --message "…"` — one locked step that appends
+   to the board AND bumps the signal (don't hand-edit + bump separately; that can lose
+   updates). Use `--section "<name>"` to post under another board section.
 3. Use the MCP bridge (`mcp__codex__codex` / `mcp__claude_chat__ask_claude`) to
    poke the other agent to take a turn.
 

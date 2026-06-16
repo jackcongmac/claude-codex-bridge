@@ -95,8 +95,8 @@ several were lived during development.
   append-to-outbox + full-schema signal bump in one step (content-first ordering;
   exit 4 if the signal can't be bumped — never a lost message), and `join` now
   registers under the lock (`_presence.py register`). The locked `join` closes the
-  unlocked-join gap; routing the documented manual post workflow (README / SKILL /
-  templates) through `bridge-post` instead of hand-edit+bump is a follow-up.
+  unlocked-join gap, and the documented workflow (README / SKILL / join / protocol)
+  now routes board posts through `bridge-post` instead of hand-edit+bump.
 - ✅ **Review-before-merge is now gated (shipped, `bridge-push` + review ledger).**
   Push refuses (exit 4) any HEAD no peer recorded a SHIP/GO for; the only escape is an
   AUDITED `--no-review`. Converts the governance failure (push unreviewed + attribute
@@ -167,9 +167,9 @@ several were lived during development.
 1. ✅ **Mechanize trust — DONE (except identity binding).** Shipped: `bridge-post`
    (locked transactional board write), the review ledger + gated `bridge-push`
    (default hard-reject, audited `--no-review`), and locked `join` registration. The
-   push gate is mechanically ENFORCED; the `bridge-post` primitive exists but normal
-   board posts aren't yet routed through it (README/SKILL/templates still describe
-   manual edit+bump — an adoption follow-up). **Still open:** identity binding —
+   push gate is mechanically ENFORCED; and the documented workflow (README / SKILL /
+   join / protocol) now routes board posts through `bridge-post` (no more hand-edit +
+   bump). **Still open:** identity binding —
    until then `--self` is nominal, so the gate is auditable + hard but not anti-spoof
    on its own (a determined author could self-certify as the peer). Identity binding is
    the next trust slice.

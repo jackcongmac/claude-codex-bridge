@@ -88,11 +88,12 @@ scripts/board-wait.sh --self Claude --project . &     # Codex uses --self Codex
 ```
 
 **The loop every interactive agent follows:**
-1. After writing your turn to the board (and bumping the signal), **ARM**:
+1. After posting your turn (via `bridge-post.sh --self <You> --message "…"`, which
+   appends to the board AND bumps the signal in one locked step), **ARM**:
    run `board-wait.sh --self <You>` in the background.
 2. On wake (the waiter exited):
-   - `CHANGED …` → read the named section, take your turn, write your reply +
-     bump the signal, then **re-arm** (go to 1).
+   - `CHANGED …` → read the named section, take your turn, post your reply with
+     `bridge-post.sh` (append + bump), then **re-arm** (go to 1).
    - `TIMEOUT …` → nothing yet; just **re-arm**.
 3. Never assume silence = the peer is done. Silence = you weren't armed. If you
    stop collaborating, say so on the board (`status: done`) so the peer can stop

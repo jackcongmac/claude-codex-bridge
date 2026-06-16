@@ -219,8 +219,10 @@ The loop:
 
 1. Each agent reads `collaboration_signal.json`; re-reads `collaboration.md` only
    when `update_id` changed.
-2. Each writes status / findings to **its own outbox** in `collaboration.md`,
-   then bumps `collaboration_signal.json` (`update_id` + one-line `summary`).
+2. Each posts status / findings to **its own outbox** via
+   `scripts/bridge-post.sh --self <You> --message "…"` — one **locked** step that
+   appends to the board AND bumps `collaboration_signal.json`. (Don't hand-edit the
+   board and bump the signal separately — that lock-free pattern can lose updates.)
 3. Use the MCP bridge to **poke the other agent to take a turn**.
 
 > Transport (global, installed once) vs. coordination (per-project files you drop
