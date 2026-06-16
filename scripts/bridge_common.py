@@ -15,6 +15,7 @@ import errno
 import socket
 import subprocess
 import tempfile
+import re
 
 OTHER = {"Claude": "Codex", "Codex": "Claude"}
 VALID_STATUS = {"active", "paused", "awaiting_human", "done"}
@@ -203,11 +204,14 @@ def _append_under_header(board_path, header, markdown):
             text = f.read()
     except FileNotFoundError:
         text = "# Agent Collaboration Board\n"
-    idx = text.find(header)
-    if idx == -1:
+    # Anchor to a FULL header line so "## Chat" can't match "## Chat Archive"
+    # (substring find would insert into the look-alike section). Trailing
+    # whitespace on the header line is tolerated.
+    m = re.search(r'(?m)^' + re.escape(header) + r'[ \t]*$', text)
+    if not m:
         text = text.rstrip() + "\n\n" + header + "\n" + entry
     else:
-        nl = text.find("\n", idx)
+        nl = text.find("\n", m.start())
         nl = len(text) if nl == -1 else nl + 1
         text = text[:nl] + entry + text[nl:]
     atomic_write(board_path, text)

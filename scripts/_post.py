@@ -26,14 +26,20 @@ from bridge_common import (  # noqa: E402
 )
 
 
-def post(project, self_name, message, section=None, summary=None, wait=10.0):
+def post(project, self_name, message, section=None, summary=None, wait=10.0, guard=None):
     """Locked append-to-section + signal bump. Returns a status string:
       "ok"            — board appended AND signal bumped
       "lockbusy"      — lock not taken within `wait`; NOTHING written
+      "superseded"    — `guard` rejected the current board UNDER the lock; NOTHING
+                        written (compare-and-append: e.g. the chat responder dropping
+                        a reply that a newer message raced ahead of)
       "signal_failed" — board appended but the signal bump failed (rare: corrupt/
                         unwritable signal). Content-first ordering means the message
                         is preserved (never a phantom wake or a lost message); the
                         caller must re-bump so the peer wakes.
+    `guard`, if given, is called with the current board text WHILE THE LOCK IS HELD;
+    returning False aborts the write atomically — no other writer can interleave
+    between the check and the append, since every writer takes this same lock.
     True two-file atomicity isn't possible across two files; this orders the writes so
     the only failure leaves content on the board (recoverable), not the reverse."""
     p = collab_paths(project)
@@ -41,6 +47,14 @@ def post(project, self_name, message, section=None, summary=None, wait=10.0):
     if not acquire_lock(p["lock"], "post-%s" % self_name, ttl=30, wait=wait):
         return "lockbusy"
     try:
+        if guard is not None:
+            try:
+                with open(p["board"]) as f:
+                    current = f.read()
+            except OSError:
+                current = ""
+            if not guard(current):
+                return "superseded"
         _append_under_header(p["board"], "## %s" % sec, message)
         try:
             prev = int((read_json(p["signal"], default={}) or {}).get("update_id", 0))

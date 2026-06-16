@@ -37,6 +37,19 @@ class PostTransactionTests(unittest.TestCase):
     def _board(self):
         return (self.collab / "collaboration.md").read_text()
 
+    def test_guard_aborts_write_atomically(self):
+        from _post import post
+        # guard returns False => nothing written, signal untouched
+        st = post(self.tmp, "Claude", "blocked", section="Chat", guard=lambda board: False)
+        self.assertEqual(st, "superseded")
+        self.assertNotIn("blocked", self._board())
+        self.assertEqual(self._signal()["update_id"], 4)
+        # guard returns True => normal append + bump
+        st = post(self.tmp, "Claude", "allowed", section="Chat", guard=lambda board: True)
+        self.assertEqual(st, "ok")
+        self.assertIn("allowed", self._board())
+        self.assertEqual(self._signal()["update_id"], 5)
+
     def test_post_appends_to_outbox_and_bumps_signal(self):
         r = self._post("--self", "Claude", "--message", "hello world")
         self.assertEqual(r.returncode, 0, r.stderr)
