@@ -56,6 +56,7 @@ class BridgeLiveTests(unittest.TestCase):
             self.assertIn("Claude", r.stdout)
             # it must hand the agent the board-wait ARM line (it can't own that itself)
             self.assertIn("board-wait", r.stdout)
+            self.assertNotIn("--stay-armed", r.stdout)
         finally:
             self._kill_keepalive()
 

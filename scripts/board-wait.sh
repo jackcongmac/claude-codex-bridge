@@ -13,15 +13,15 @@
 #
 # Usage:
 #   board-wait.sh --self <YourName> [--project DIR] [--since <update_id>]
-#                 [--timeout SEC] [--interval SEC]
+#                 [--timeout SEC] [--interval SEC] [--stay-armed]
 #
-# Exit 0 + prints "CHANGED ..." + the changed section when the peer updates.
-# Exit 0 + prints "TIMEOUT ..." when --timeout elapses (re-arm and wait again).
-# The agent loop: run in background -> on wake, if CHANGED read+act+reply+re-arm;
-# if TIMEOUT just re-arm. This is how an interactive agent becomes reactive.
+# Default mode: exit 0 + print "CHANGED ..." when the peer updates, or "TIMEOUT ..."
+# when --timeout elapses. That legacy wake-on-exit mode requires immediate re-arm.
+# With --stay-armed, print each CHANGED/TIMEOUT event and keep listening so the
+# panel remains handshake-live across peer updates.
 set -euo pipefail
 
-SELF=""; PROJECT="$PWD"; SINCE=""; TIMEOUT="${BRIDGE_BOARD_WAIT_TIMEOUT:-1800}"; INTERVAL="${BRIDGE_BOARD_WAIT_INTERVAL:-5}"
+SELF=""; PROJECT="$PWD"; SINCE=""; TIMEOUT="${BRIDGE_BOARD_WAIT_TIMEOUT:-1800}"; INTERVAL="${BRIDGE_BOARD_WAIT_INTERVAL:-5}"; STAY_ARMED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
@@ -29,6 +29,7 @@ while [ $# -gt 0 ]; do
     --since) SINCE="$2"; shift 2;;
     --timeout) TIMEOUT="$2"; shift 2;;
     --interval) INTERVAL="$2"; shift 2;;
+    --stay-armed) STAY_ARMED=1; shift;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -93,10 +94,20 @@ if i==-1: print('(section not found)')
 else:
     nxt=t.find('\n## ', i+len(h)); print(t[i:(len(t) if nxt==-1 else nxt)].strip()[:2000])
 " 2>/dev/null || true
+    if [ "$STAY_ARMED" = "1" ]; then
+      SINCE="$UID_NOW"
+      DEADLINE=$(( $(date +%s) + TIMEOUT ))
+      continue
+    fi
     exit 0
   fi
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
     echo "TIMEOUT no peer update in ${TIMEOUT}s (since update_id=$SINCE) — re-arm to keep waiting."
+    if [ "$STAY_ARMED" = "1" ]; then
+      SINCE="$(field update_id)"
+      DEADLINE=$(( $(date +%s) + TIMEOUT ))
+      continue
+    fi
     exit 0
   fi
   sleep "$INTERVAL"

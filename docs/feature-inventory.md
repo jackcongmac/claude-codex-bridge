@@ -35,8 +35,9 @@ board state + the ARM command; `collaboration_participants.json` tracks members.
 
 **🌟🌟 Reactivity for interactive agents — `board-wait.sh` (the keystone).** A chat
 agent is request/response and can't be woken by an external board write. board-wait
-blocks in the background, exits on a peer change → the harness re-invokes the agent.
-Single-armer noclobber pidfile mutex.
+blocks in the background, exits on a peer change -> the harness re-invokes the
+agent, and the agent re-arms after acting. `--stay-armed` exists as an optional
+liveness/pong helper, not the default wake task. Single-armer noclobber pidfile mutex.
 
 **Presence & liveness.** `_presence.py` heartbeat + departure broadcast;
 🌟 `presence-keepalive.sh` keeps `last_seen` fresh independent of board-wait (so a
@@ -155,9 +156,10 @@ several were lived during development.
 - **`join` doesn't itself start keepalive** — by design it remains a printable
   protocol join. `bridge-live.sh` now covers the practical go-live path by starting
   `presence-keepalive` and printing the `board-wait` ARM command.
-- **`bridge-live` is intentionally not a board-wait supervisor** — `board-wait` exits
-  as the wake signal, so a separate supervisor must not swallow that signal. The
-  agent still has to run/re-arm the printed command after each turn.
+- **`bridge-live` is intentionally not a board-wait owner** — the agent/harness
+  still starts board-wait, and the default command must preserve wake-on-exit.
+  `--stay-armed` is reserved for a separate liveness/pong helper, not the pane's
+  wake task.
 - ✅ **MCP board discovery — fixed (roadmap #3).** `claude_chat_mcp.py` now resolves
   the real `.collab/collaboration.md` via `_find_board` (walks up like
   `find_project_root`), instead of assuming `./collaboration.md` in cwd.
@@ -171,8 +173,12 @@ several were lived during development.
 - ✅ notify + revive shipped (roadmap #4): `bridge-liveness.sh --notify` pages once
   on a DEAD/DEPARTED transition; `bridge-revive.sh` re-ensures self + nudges a down
   peer. Plain report/`--watch` stay read-only.
-- Reactivity depends on the agent reliably re-ARMing; no supervisor guarantees it
-  (`bridge-live` reduces the footprint but board-wait re-arm is still the agent's job).
+- Reactivity depends on the agent reliably re-ARMing after each wake; no supervisor
+  guarantees that yet.
+- Still missing: if a peer is silent for >30 minutes and a re-handshake fails, the
+  board should assign a backup agent instead of waiting indefinitely. Boundary:
+  a backup reviewer must be a real independent peer that reads the diff, runs
+  verification, and records GO/REVISE; it must never auto-SHIP or bypass the review gate.
 
 **Scale & environment**
 - **Single-machine / shared-filesystem.** `.collab` is local files; cross-machine
@@ -236,9 +242,8 @@ to verify: Channels is Claude-Code (not confirmed for Claude Desktop), Anthropic
    the next trust slice.
 2. ✅ **`bridge-live` go-live helper — bounded slice shipped.** One command
    registers the agent, starts/reuses `presence-keepalive`, reports liveness, and
-   prints the exact `board-wait` ARM command. It does **not** supervise board-wait,
-   because board-wait's exit is the harness wake signal and must remain visible to
-   the agent.
+   prints the exact `board-wait` ARM command. It does **not** own board-wait; the
+   agent/harness still starts it.
 3. ✅ **Fix MCP board discovery — DONE.** `claude_chat_mcp.py` now resolves the board
    via `_find_board(cwd)` (walks up like `find_project_root`, `.collab` then legacy
    flat, stops at a `.git` boundary) and names it in the per-call `grounding(cwd)`.
@@ -246,11 +251,18 @@ to verify: Channels is Claude-Code (not confirmed for Claude Desktop), Anthropic
    `_notify.py`) pages once on a peer's transition into DEAD/DEPARTED (OS + a "##
    Liveness" board note, debounced, quiet bootstrap/recovery); `bridge-revive.sh`
    re-ensures self and nudges a down peer + notifies the human (no MCP-spawn).
-5. ✅ **Distribution — PUBLISHED to npm.** `@jackcongus/claude-codex-bridge@0.8.0`
+5. **Backup assignment after peer silence.** If an assigned reviewer/executor is idle
+   for >30 minutes and a re-handshake fails, create an audited handoff to a backup
+   agent rather than blocking on the original peer. The backup must be a genuinely
+   independent reviewer/executor: read the diff or task, run its own verification,
+   and record GO/REVISE or work output. Never auto-SHIP or bypass the push gate.
+   When the original owner returns, record the ownership transition and current state
+   so work does not fork.
+6. ✅ **Distribution — PUBLISHED to npm.** `@jackcongus/claude-codex-bridge@0.8.0`
    (`npm i -g @jackcongus/claude-codex-bridge` → `claude-codex-bridge install`; scoped
    because the unscoped name is taken). Still to do: Claude Code plugin marketplace for
    the Claude half; have `join`/handshake actually RUN the version check (not just mention).
-6. **Cross-surface (collab-MCP-server) — transport-agnostic (see Strategic direction).**
+7. **Cross-surface (collab-MCP-server) — transport-agnostic (see Strategic direction).**
    Pull the coordination layer behind one local MCP server any client (CLI or desktop)
    connects to; presence = MCP connection liveness. For WAKE, ride whatever exists:
    board-wait today, **Claude Code Channels** (the official push-into-a-running-session
@@ -258,12 +270,12 @@ to verify: Channels is Claude-Code (not confirmed for Claude Desktop), Anthropic
    constant on top. This is what would let a Claude Code session self-wake on board
    events (and a desktop agent too, IF/when Channels extends to Claude Desktop —
    unconfirmed; see the caveats above).
-7. **Cross-machine + test depth** (`bridge-doctor` repair command ✅ shipped). Still:
+8. **Cross-machine + test depth** (`bridge-doctor` repair command ✅ shipped). Still:
    host/pid-aware stale-breaking baked into ALL lock acquisition — `collaboration.lock`,
    the board-wait/keepalive pidfile mutexes, AND `.bridge_push.lock` (which today breaks
    on TTL alone, so a long live push can be broken after `BRIDGE_PUSH_TTL`). Plus a real
    two-window / MCP-transport E2E test.
-8. **Agent-bootstrapped peers (exploration).** Today a human opens BOTH agents in two
+9. **Agent-bootstrapped peers (exploration).** Today a human opens BOTH agents in two
    windows; everything (handshake, all skills) runs in the CLI. The vision: one agent
    stands up its partner and they auto-handshake — no second human action. Two
    sub-cases with very different feasibility:

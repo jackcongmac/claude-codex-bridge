@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""_liveness.py — verdict on whether each agent is alive, robust to the board-wait
-re-arm gap.
+"""_liveness.py — verdict on whether each agent is alive, robust to temporarily
+unarmed board-wait listeners.
 
-WHY: board-wait.sh is one-shot (wake -> exit -> the agent re-arms). Judging liveness
-by the board-wait PIDFILE therefore false-flags a present, reactive agent as DEAD
-during the brief re-arm gap — which is exactly what made the user unsure the two
-agents were connected. So PRESENCE (the last_seen heartbeat) is the PRIMARY signal;
-ARMED (pidfile alive) is reported as a secondary detail only.
+WHY: judging liveness by the board-wait PIDFILE alone false-flags a present agent
+as DEAD whenever the listener is temporarily unarmed (legacy wake-on-exit, active
+work, or a missed re-arm). So PRESENCE (the last_seen heartbeat) is the PRIMARY
+signal; ARMED (pidfile alive) is reported as a secondary detail only.
 
 Verdicts (see DESIGN_liveness.md):
   LIVE     — present (last_seen fresh) AND board-wait armed right now
-  PRESENT  — present but pidfile momentarily down (the normal re-arm gap; NOT a problem)
+  PRESENT  — present but not currently armed (verify before handoff)
   STALE    — last_seen older than the present-window but younger than departure threshold
   DEAD     — last_seen older than the departure threshold
   DEPARTED — the participant carries the departed flag
@@ -77,7 +76,7 @@ def verdict(part, collab_dir, now, present_window, stale_after):
     elif armed:
         v = "LIVE"
     else:
-        v = "PRESENT"                            # present but in the re-arm gap
+        v = "PRESENT"                            # present but not currently armed
     return {"name": name, "verdict": v, "armed": armed,
             "age": (int(age) if age is not None else None)}
 

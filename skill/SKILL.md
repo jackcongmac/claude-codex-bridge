@@ -251,8 +251,9 @@ scripts/bridge-live.sh --self <You> --project .
 ```
 
 It registers you, starts the `presence-keepalive` singleton, reports liveness, and
-prints the `board-wait` ARM command. It intentionally does not own `board-wait`,
-because `board-wait` exits to wake the agent and must be re-armed after each turn.
+prints the `board-wait` ARM command. The default command preserves wake-on-exit;
+`--stay-armed` is an optional liveness/pong helper and is not the interactive pane's
+wake task.
 
 The Claude colleague is already told to read the board automatically.
 

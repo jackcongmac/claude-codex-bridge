@@ -81,7 +81,7 @@ YOUR NEXT ACTIONS:
      then ARM board-wait in the BACKGROUND (its EXIT is how you wake on peer updates):
        $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
   4. When board-wait exits: if CHANGED, act + reply via bridge-post.sh + re-ARM;
-     if TIMEOUT, just re-ARM. Never treat silence as "peer is done" — re-ARM.
+     if TIMEOUT, just re-ARM. Never treat silence as "peer is done" — verify liveness.
   5. Before handing real work to the peer, CONFIRM the channel is live:
        $HERE/bridge-handshake.sh --self "$SELF" --peer <Them>
      GO = both armed & listening; NO-GO prints the exact fix. Don't post into

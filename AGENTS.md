@@ -13,8 +13,8 @@ scripts/bridge-autostart.sh --self <YourName> --peer <PeerName> --role <peer|pla
 (`<YourName>` is your stable agent id this session, e.g. `Codex`, `codex-exec-1`,
 `Claude`, `claude-rev`; `<PeerName>` is the other stable participant, usually
 `Claude` or `Codex`.) `board-wait.sh` must be started by the agent/harness as the
-tracked background task; its exit is what wakes the agent. `bridge-autostart.sh`
-then performs the proactive handshake: it joins the board, starts liveness, runs
+tracked background task; its exit is what wakes the agent. `bridge-autostart.sh` then
+performs the proactive handshake: it joins the board, starts liveness, runs
 `bridge-handshake.sh`, and reports GO/NO-GO clearly. If NO-GO, it leaves a board
 invite and prints the exact peer fix; that failure is non-blocking for work that
 does not require a handoff.

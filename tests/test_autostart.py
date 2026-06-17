@@ -99,9 +99,11 @@ class BridgeAutostartTests(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("NON-BLOCKING", r.stdout)
         self.assertIn("board-wait.sh --self \"Codex\"", r.stdout)
+        self.assertNotIn("--stay-armed", r.stdout)
         board = self._board()
         self.assertEqual(board.count("please join+ARM"), 1)
         self.assertIn("@Codex", board)
+        self.assertNotIn("--stay-armed", board)
         pid_after = (self.collab / ".boardwait_Claude.pid").read_text().strip()
         self.assertEqual(pid_before, pid_after, "autostart must not replace self board-wait")
 
@@ -112,6 +114,7 @@ class BridgeAutostartTests(unittest.TestCase):
 
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("Self fix", r.stdout)
+        self.assertNotIn("--stay-armed", r.stdout)
         self.assertNotIn("please join+ARM", self._board())
         self.assertFalse((self.collab / ".boardwait_Claude.pid").exists())
 

@@ -265,9 +265,9 @@ scripts/bridge-live.sh --self Codex --project .
 
 `bridge-live` registers you on the board, starts one `presence-keepalive`
 process if needed, prints the current liveness report, and gives you the exact
-`board-wait` command to run in the background. It deliberately does not own
-`board-wait`: that one-shot watcher exits to wake the agent, so the agent must
-re-arm it after each turn.
+`board-wait` command to run in the background. The default command preserves
+wake-on-exit; `--stay-armed` is an optional liveness/pong helper and is not the
+interactive pane's wake task.
 
 The loop:
 
@@ -292,7 +292,7 @@ scripts/bridge-liveness.sh report --self Codex --project . --json
 ```
 
 `LIVE` means the agent is present and currently armed. `PRESENT` means the
-heartbeat is fresh but the one-shot watcher is between wake and re-arm. `STALE`,
+heartbeat is fresh but the listener is not currently armed. `STALE`,
 `DEAD`, and `DEPARTED` mean the heartbeat is aging, expired, or explicitly marked
 departed.
 

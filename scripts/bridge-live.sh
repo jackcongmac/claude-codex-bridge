@@ -4,8 +4,9 @@
 #
 # It registers the agent, starts the presence keepalive if it is not already
 # running, prints current liveness, and gives the exact board-wait ARM command.
-# board-wait is intentionally not supervised here: its exit is the wake signal the
-# harness must observe and then re-arm after each turn.
+# The default ARM command preserves wake-on-exit: board-wait exits on CHANGED/TIMEOUT
+# so the agent harness can wake the interactive pane. --stay-armed is an optional
+# liveness/pong helper, not the default wake task.
 set -euo pipefail
 
 SELF=""; ROLE="peer"; PROJECT="$PWD"; KEEPALIVE_INTERVAL="${BRIDGE_KEEPALIVE_INTERVAL:-10}"
