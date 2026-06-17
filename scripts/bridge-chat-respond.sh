@@ -5,8 +5,10 @@
 # This is what makes the group chat REAL-TIME. Run it in the BACKGROUND once per
 # agent (Claude, Codex). It watches collaboration_signal.json; whenever the board
 # changes, it runs one responder pass: if the LATEST ## Chat message is from
-# someone else AND @-mentions this agent (or @All), it spawns the agent to write a
-# brief reply and posts it back to ## Chat. Never replies to itself; a
+# someone else AND targets this agent — a human group message with no @ (everyone
+# replies), or an explicit @this-agent / @All — it spawns the agent to write a brief
+# reply and posts it back to ## Chat. An agent posting with no @ compels no one.
+# Never replies to itself; a
 # consecutive-agent-turn cap (default 6, --max-turns) breaks ping-pong until a
 # human posts again.
 #

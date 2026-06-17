@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """_chat_respond.py — the group-chat auto-responder (one pass).
 
-An agent replies ONLY when the LATEST ## Chat message is from someone else AND
-@-mentions it (or @All). Never to itself. A consecutive-agent-turn cap breaks
-ping-pong (a human message resets it). A spawned agent that replies "PASS" stays
-silent. The reply is plain text posted back to ## Chat via the locked board write.
+An agent replies when the LATEST ## Chat message is from someone else AND is either
+a HUMAN group message with no `@` (everyone replies) or @-mentions it (or @All). An
+agent posting with no `@` compels no one. Never to itself. A consecutive-agent-turn
+cap breaks ping-pong (a human message resets it). A spawned agent that replies "PASS"
+stays silent. The reply is plain text posted back to ## Chat via the locked board write.
 
 CLI: _chat_respond.py once --self <Agent> [--project DIR] [--max-turns N]
 """
@@ -55,15 +56,57 @@ def _same_msg(a, b):
     return a is not None and b is not None and tuple(a.get(k) for k in _KEY) == tuple(b.get(k) for k in _KEY)
 
 
-def _prompt(self_name, msgs):
+def _targets(msg):
+    """Who MUST reply to this message:
+    - a HUMAN message with NO @ is a group message → everyone (both agents) replies;
+    - @X → X (the other agent may simply stay quiet);
+    - an AGENT message compels a reply ONLY via an explicit @, so two agents don't
+      ping-pong forever on plain chatter (you watch them; they @ you when they want you).
+    """
+    who = mentions(msg.get("text", ""))
+    if not who and msg.get("speaker") not in AGENTS:
+        return set(AGENTS)
+    return who
+
+
+def _select_prompt(msgs, self_name):
+    """Return (prompt_msg, status) for the current pass.
+
+    Normally the latest message is the prompt. The exception is trailing agent chatter
+    with no @: that can be the first responder's answer to a human group message. A
+    delayed second responder must still answer the original prompt unless it already
+    spoke after that prompt.
+    """
+    latest = msgs[-1]
+    if latest["speaker"] == self_name:
+        return None, "self"
+    if self_name in _targets(latest):
+        return latest, None
+    if latest["speaker"] not in AGENTS or _targets(latest):
+        return None, "not-addressed"
+
+    spoke_after = False
+    for msg in reversed(msgs[:-1]):
+        if msg["speaker"] == self_name:
+            spoke_after = True
+        if msg["speaker"] in AGENTS and not _targets(msg):
+            continue
+        if self_name in _targets(msg) and not spoke_after:
+            return msg, None
+        return None, "not-addressed"
+    return None, "not-addressed"
+
+
+def _prompt(self_name, msgs, prompt_msg):
     other = "Codex" if self_name == "Claude" else "Claude"
     convo = "\n".join("%s: %s" % (m["speaker"], m["text"]) for m in msgs)
     return (
         "You are %s, one of two AI agents (Claude, Codex) in a group chat with the "
-        "human. Reply BRIEFLY (1-3 sentences) to the LAST message, which is addressed "
+        "human. Reply BRIEFLY (1-3 sentences) to this message, which is addressed "
         "to you. To pass the turn, @-mention someone: @%s (the other agent), @<human>, "
         "or @All. If you have nothing useful to add, reply with exactly: PASS\n\n"
-        "Conversation so far:\n%s\n\nYour reply as %s:" % (self_name, other, convo, self_name))
+        "Message to answer:\n%s: %s\n\nConversation so far:\n%s\n\nYour reply as %s:"
+        % (self_name, other, prompt_msg["speaker"], prompt_msg["text"], convo, self_name))
 
 
 def _spawn_claude(prompt, project):
@@ -98,19 +141,18 @@ def _default_runner(self_name):
 
 
 def respond_once(project, self_name, max_turns=6, runner=None):
-    """One pass: reply iff the latest message is someone else's and @-mentions me and
-    the agent-turn cap isn't hit. Returns a status string (empty/self/not-addressed/
-    capped/passed/responded)."""
+    """One pass: reply iff the latest message is someone else's and targets me (a human
+    group message with no @, or an explicit @me / @All) and the agent-turn cap isn't hit.
+    Returns a status string (empty/self/not-addressed/capped/passed/responded)."""
     project = find_project_root(project)
     p = collab_paths(project)
     msgs = parse_chat(_chat_section(p["board"]))
     if not msgs:
         return "empty"
     latest = msgs[-1]
-    if latest["speaker"] == self_name:
-        return "self"
-    if self_name not in mentions(latest["text"]):
-        return "not-addressed"
+    prompt_msg, status = _select_prompt(msgs, self_name)
+    if status:
+        return status
     streak = 0                                  # consecutive trailing agent messages
     for m in reversed(msgs):
         if m["speaker"] in AGENTS:
@@ -119,7 +161,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
             break
     if streak >= max_turns:
         return "capped"
-    reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs), project) or "").strip()
+    reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs, prompt_msg), project) or "").strip()
     if not reply or reply.upper() == "PASS":
         return "passed"
     # Spawning the agent took seconds. If a newer message landed meanwhile, this reply
@@ -129,7 +171,16 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     # the newer message bumped the signal, so the loop re-fires and answers it fresh.
     def _guard(board_text):
         tail = parse_chat(_chat_section_text(board_text))
-        return _same_msg(tail[-1] if tail else None, latest)
+        if not tail:
+            return False
+        newest = tail[-1]
+        if _same_msg(newest, latest):
+            return True                    # tail unchanged → post
+        # A newer message arrived during the (slow) spawn. DROP this reply only if that
+        # newer message is a fresh prompt addressed to ME — the loop will answer it
+        # instead. If it's the other agent's parallel reply or chatter not for me, my
+        # answer to the original prompt is still valid, so post it (replies may interleave).
+        return not (newest.get("speaker") != self_name and self_name in _targets(newest))
 
     st = _board_post(project, self_name, "**%s:** %s" % (self_name, reply),
                      section="Chat", guard=_guard)

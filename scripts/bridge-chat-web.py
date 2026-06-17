@@ -51,9 +51,10 @@ def parse_chat(section):
 
 
 def mentions(text):
-    """Parse @-mentions → the set of agents that must respond (the loop control):
+    """Parse @-mentions → the set of agents explicitly named in the text:
     @All / @所有人 → both; @Claude (also '@Claude Code') / @Codex → that one; none →
-    empty (nobody auto-replies)."""
+    empty set. (This is just the parser; who is compelled to reply — including a human's
+    no-@ message broadcasting to both — is decided by _chat_respond._targets.)"""
     # Real @-mentions only: the @ must NOT be inside a word/email (lookbehind), the name
     # must end at a boundary (\b / not a CJK char) — so "a@codex.io", "@clauded",
     # "@codexical", "@所有人类" are NOT mentions.

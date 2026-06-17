@@ -12,9 +12,10 @@ import _chat_respond as cr  # noqa: E402
 
 
 class RespondOnceTests(unittest.TestCase):
-    """The chat auto-responder: an agent replies ONLY when the latest message is from
-    someone else and @-mentions it (or @All); never to itself; a consecutive-agent-turn
-    cap breaks ping-pong; 'PASS' means stay silent."""
+    """The chat auto-responder: an agent replies when the latest message is from someone
+    else and targets it — either a human group message with no @ (everyone replies) or an
+    explicit @it (or @All); an agent posting with no @ compels no one; never to itself; a
+    consecutive-agent-turn cap breaks ping-pong; 'PASS' means stay silent."""
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -42,10 +43,30 @@ class RespondOnceTests(unittest.TestCase):
         self.assertEqual(self._run("Claude", reply="hi back"), "responded")
         self.assertIn("**Claude:** hi back", self._chat_text())
 
-    def test_silent_when_not_mentioned(self):
+    def test_silent_when_someone_else_is_addressed(self):
+        # @Codex means "for Codex"; Claude may stay quiet.
         self._set_chat([("Jack", "@Codex run it")])
         self.assertEqual(self._run("Claude"), "not-addressed")
         self.assertNotIn("**Claude:**", self._chat_text())
+
+    def test_human_no_at_is_a_group_message_everyone_replies(self):
+        self._set_chat([("Jack", "大家都在吗")])
+        self.assertEqual(self._run("Claude", reply="在"), "responded")
+
+    def test_delayed_agent_still_answers_group_message_after_peer_reply(self):
+        self._set_chat([("Jack", "大家都在吗"), ("Claude", "我在")])
+        self.assertEqual(self._run("Codex", reply="我也在"), "responded")
+        self.assertIn("**Codex:** 我也在", self._chat_text())
+
+    def test_agent_does_not_answer_same_group_message_twice(self):
+        self._set_chat([("Jack", "大家都在吗"), ("Codex", "我在"), ("Claude", "我也在")])
+        self.assertEqual(self._run("Codex", reply="重复回复"), "not-addressed")
+        self.assertNotIn("重复回复", self._chat_text())
+
+    def test_agent_chatter_without_at_does_not_compel_a_reply(self):
+        # An agent talking without @ — the human watches; the other agent isn't forced in.
+        self._set_chat([("Jack", "@Codex go"), ("Codex", "我先看看代码")])
+        self.assertEqual(self._run("Claude"), "not-addressed")
 
     def test_never_responds_to_itself(self):
         self._set_chat([("Jack", "@Claude hi"), ("Claude", "already replied")])
@@ -72,17 +93,40 @@ class RespondOnceTests(unittest.TestCase):
         (self.collab / "collaboration.md").write_text("# Board\n")
         self.assertEqual(self._run("Claude"), "empty")
 
-    def test_superseded_when_message_interleaves_during_spawn(self):
+    def test_superseded_when_a_NEW_PROMPT_FOR_ME_interleaves(self):
         convo = [("Jack", "@Claude question one")]
         self._set_chat(convo)
 
-        def runner(prompt, project):           # a new message lands mid-spawn
-            convo.append(("Jack", "@Codex actually never mind"))
+        def runner(prompt, project):           # a fresh @Claude prompt lands mid-spawn
+            convo.append(("Jack", "@Claude scrap that — question two"))
             self._set_chat(convo)
             return "answer to question one"
 
         self.assertEqual(cr.respond_once(self.tmp, "Claude", runner=runner), "superseded")
         self.assertNotIn("answer to question one", self._chat_text())  # stale reply dropped
+
+    def test_posts_even_if_a_message_for_someone_else_interleaves(self):
+        convo = [("Jack", "@Claude question one")]
+        self._set_chat(convo)
+
+        def runner(prompt, project):           # an unrelated message (not for me) lands
+            convo.append(("Codex", "我这边在跑测试"))
+            self._set_chat(convo)
+            return "answer one"
+
+        self.assertEqual(cr.respond_once(self.tmp, "Claude", runner=runner), "responded")
+        self.assertIn("answer one", self._chat_text())  # my answer to the original is still valid
+
+    def test_drops_reply_if_chat_was_cleared_during_spawn(self):
+        convo = [("Jack", "@Claude question one")]
+        self._set_chat(convo)
+
+        def runner(prompt, project):           # user closed/archived the live chat mid-spawn
+            (self.collab / "collaboration.md").write_text("# Board\n\n## Chat\n\n")
+            return "late answer"
+
+        self.assertEqual(cr.respond_once(self.tmp, "Claude", runner=runner), "superseded")
+        self.assertNotIn("late answer", self._chat_text())
 
     def test_lockbusy_surfaces_for_retry(self):
         self._set_chat([("Jack", "@Claude hi")])

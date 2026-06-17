@@ -12,8 +12,10 @@ import unittest  # noqa: E402
 
 
 class MentionsTests(unittest.TestCase):
-    """@-mentions decide who must respond (the loop control): only @-mentioned agents
-    reply; @All / @所有人 means both; no mention means nobody auto-replies."""
+    """The mentions() parser: returns the set of agents explicitly @-mentioned.
+    @All / @所有人 → both; @Claude (also '@Claude Code') / @Codex → that one; no mention
+    → empty set. (Who is *compelled* to reply is decided by _chat_respond._targets,
+    not here — a human's no-@ message still broadcasts to both.)"""
 
     def test_no_mention_is_empty(self):
         self.assertEqual(cw.mentions("just chatting"), set())

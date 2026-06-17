@@ -100,7 +100,8 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    stops them. Pass `--no-responders` to launch the window only.
 3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
-   no `@` = nobody auto-replies. Agents can @ each other too (a consecutive-agent-turn
+   no `@` from you = **both reply** (it's a group message to the room). Agents can @ each
+   other too — but an agent posting with no `@` compels no one (a consecutive-agent-turn
    cap, default 6, breaks ping-pong until a human posts). Close with the **✕** top-right
    — that **archives the session** to `<root>/.collab/chat_archive/chat-<time>.md` and
    clears the live thread for next time.
