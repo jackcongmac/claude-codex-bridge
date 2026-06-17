@@ -245,6 +245,30 @@ class RespondOnceTests(unittest.TestCase):
         state = json.loads(typing_path.read_text())
         self.assertNotIn("Claude", state.get("agents", {}))
 
+    def test_corrupt_typing_state_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude recover typing")])
+        typing_path = self.collab / "chat_typing.json"
+        typing_path.write_text("{not json")
+
+        self.assertEqual(self._run("Claude", reply="typing recovered"), "responded")
+
+        self.assertIn("**Claude:** typing recovered", self._chat_text())
+        state = json.loads(typing_path.read_text())
+        self.assertIsInstance(state.get("agents"), dict)
+        self.assertNotIn("Claude", state.get("agents", {}))
+
+    def test_malformed_typing_agents_state_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude recover agents")])
+        typing_path = self.collab / "chat_typing.json"
+        typing_path.write_text(json.dumps({"agents": ["bad"]}))
+
+        self.assertEqual(self._run("Claude", reply="agents recovered"), "responded")
+
+        self.assertIn("**Claude:** agents recovered", self._chat_text())
+        state = json.loads(typing_path.read_text())
+        self.assertIsInstance(state.get("agents"), dict)
+        self.assertNotIn("Claude", state.get("agents", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

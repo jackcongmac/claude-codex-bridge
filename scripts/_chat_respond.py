@@ -117,7 +117,15 @@ def _mark_delivery(project, self_name, msg, status):
 
 
 def _load_typing(project):
-    return read_json(_typing_path(project), default={"agents": {}}) or {"agents": {}}
+    try:
+        state = read_json(_typing_path(project), default={"agents": {}}) or {"agents": {}}
+    except RuntimeError:
+        state = {"agents": {}}
+    if not isinstance(state, dict):
+        state = {"agents": {}}
+    if not isinstance(state.get("agents", {}), dict):
+        state["agents"] = {}
+    return state
 
 
 def _set_typing(project, self_name, msg):
