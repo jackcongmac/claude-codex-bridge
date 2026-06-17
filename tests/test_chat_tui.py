@@ -72,6 +72,18 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertIn("Claude:在线", r.stdout)
         self.assertIn("Codex:离线", r.stdout)
 
+    def test_interactive_line_mode_ignores_chat_archive_lookalike_section(self):
+        (self.collab / "collaboration.md").write_text(
+            "# Board\n\n## Chat Archive\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** old\n\n"
+            "## Chat\n\n### 2026-06-16 10:00:02 PDT\n\n**Jack:** live\n")
+
+        r = self._chat("--self", "Jack", "--interactive", "--no-responders",
+                       stdin="/exit\n")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("live", r.stdout)
+        self.assertNotIn("old", r.stdout)
+
     def test_post_chat_message_escapes_board_section_header_lines(self):
         st = ct.post_chat_message(self.tmp, "Jack", "hello\n## Claude Outbox\nstill chat")
 

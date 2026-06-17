@@ -231,12 +231,12 @@ def read_section(board_path, header_name):
             text = f.read()
     except FileNotFoundError:
         return ""
-    needle = "## " + header_name
-    idx = text.find(needle)
-    if idx == -1:
+    m = re.search(r'(?m)^## ' + re.escape(header_name) + r'[ \t]*$', text)
+    if not m:
         return ""
-    nxt = text.find("\n## ", idx + len(needle))
-    return text[idx: (len(text) if nxt == -1 else nxt)].strip()
+    nxt = re.search(r'(?m)^## ', text[m.end():])
+    end = len(text) if not nxt else m.end() + nxt.start()
+    return text[m.start():end].strip()
 
 
 # ---------- roles ----------

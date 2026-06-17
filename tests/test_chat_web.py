@@ -107,6 +107,15 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("\\## Claude Outbox", chat)
         self.assertEqual(msgs[-1]["text"], "hello\n\\## Claude Outbox\nstill chat")
 
+    def test_messages_endpoint_ignores_chat_archive_lookalike_section(self):
+        pathlib.Path(self.tmp, ".collab", "collaboration.md").write_text(
+            "# Board\n\n## Chat Archive\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** old\n\n"
+            "## Chat\n\n### 2026-06-16 10:00:02 PDT\n\n**Jack:** live\n")
+
+        msgs = json.loads(self._get("/messages"))
+
+        self.assertEqual([(m["speaker"], m["text"]) for m in msgs], [("Jack", "live")])
+
     def test_status_reports_typing_agents(self):
         pathlib.Path(self.tmp, ".collab", "chat_typing.json").write_text(json.dumps({
             "agents": {"Claude": {"status": "thinking", "since": cw.now_str(), "message_id": "abc"}}

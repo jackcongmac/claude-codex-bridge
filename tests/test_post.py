@@ -68,6 +68,15 @@ class PostTransactionTests(unittest.TestCase):
         self.assertIn("## Decision Log", self._board())
         self.assertEqual(self._signal()["changed_section"], "Decision Log")
 
+    def test_read_section_matches_exact_header_line(self):
+        (self.collab / "collaboration.md").write_text(
+            "# Board\n\n## Chat Archive\n\nold archived stuff\n\n"
+            "## Chat  \n\nlive chat\n\n## Claude Outbox\n\nnote\n")
+
+        self.assertEqual(bc.read_section(self.collab / "collaboration.md", "Chat"),
+                         "## Chat  \n\nlive chat")
+        self.assertEqual(bc.read_section(self.collab / "collaboration.md", "Missing"), "")
+
     def test_two_posts_increment_update_id_sequentially(self):
         self._post("--self", "Claude", "--message", "one")
         self._post("--self", "Codex", "--message", "two")
