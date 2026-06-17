@@ -177,6 +177,20 @@ class RespondOnceTests(unittest.TestCase):
         self.assertIn("answer first", board)
         self.assertIn("answer standup", board)
 
+    def test_typing_state_is_visible_only_while_runner_is_active(self):
+        self._set_chat([("Jack", "@Claude think")])
+        typing_path = self.collab / "chat_typing.json"
+
+        def runner(prompt, project):
+            state = json.loads(typing_path.read_text())
+            self.assertEqual(state["agents"]["Claude"]["status"], "thinking")
+            self.assertIn("message_id", state["agents"]["Claude"])
+            return "done"
+
+        self.assertEqual(cr.respond_once(self.tmp, "Claude", runner=runner), "responded")
+        state = json.loads(typing_path.read_text())
+        self.assertNotIn("Claude", state.get("agents", {}))
+
 
 if __name__ == "__main__":
     unittest.main()

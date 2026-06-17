@@ -200,6 +200,9 @@ a simple, durable convention that turns two agents into colleagues:
   handled so a restarted responder can replay missed @ messages with best-effort
   handled-id dedupe. Delivery is at-least-once: a crash after posting a reply but
   before recording handled state can re-answer that one message on restart.
+- **`chat_typing.json`** — transient group-chat UX state. A responder writes
+  `thinking` while Claude/Codex is generating a reply, and the web chat hides stale
+  entries automatically if a responder dies before clearing them.
 
 Drop both into a project (idempotent, never overwrites existing files):
 

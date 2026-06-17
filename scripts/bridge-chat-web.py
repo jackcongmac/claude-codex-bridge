@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import webbrowser
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -119,11 +120,31 @@ def archive_and_clear_chat(project):
         release_lock(p["lock"])
 
 
+def _typing_active(info, now=None):
+    if not isinstance(info, dict) or info.get("status") != "thinking":
+        return False
+    stale = float(os.environ.get("BRIDGE_CHAT_TYPING_STALE", "300"))
+    try:
+        since = time.mktime(time.strptime((info.get("since") or "")[:19], "%Y-%m-%d %H:%M:%S"))
+    except Exception:
+        return False
+    return ((now or time.time()) - since) <= stale
+
+
+def chat_status(project, now=None):
+    p = collab_paths(find_project_root(project))
+    state = read_json(p["chat_typing"], default={"agents": {}}) or {"agents": {}}
+    typing = sorted(name for name, info in (state.get("agents", {}) or {}).items()
+                    if _typing_active(info, now=now))
+    return {"typing": typing}
+
+
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>群聊</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
 #close{cursor:pointer;font-size:20px;color:#bbb}#close:hover{color:#fff}
 #log{flex:1;overflow-y:auto;padding:12px}
+#typing{min-height:20px;padding:0 14px 8px;color:#777;font-size:13px}
 .row{display:flex;margin:6px 0}.row.me{justify-content:flex-end}
 .who{font-size:11px;color:#888;margin:0 8px 2px}
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
@@ -136,6 +157,7 @@ button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c
 </style></head><body>
 <header><b>群聊 · __SELF__</b><span id=close title=关闭>✕</span></header>
 <div id=log></div>
+<div id=typing></div>
 <footer><div id=at></div><input id=msg placeholder="说点什么…(打 @ 选人)" autofocus><button id=send>发送</button></footer>
 <script>
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
@@ -151,11 +173,13 @@ msg.addEventListener('input',showAt);
 msg.addEventListener('blur',()=>setTimeout(()=>{AT.style.display='none';},150));
 async function load(){
   let ms; try{ms=await (await fetch('/messages')).json();}catch(e){return;}
+  let st={typing:[]}; try{st=await (await fetch('/status')).json();}catch(e){}
   const log=document.getElementById('log');
   const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
   log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div></div></div>`).join('');
   const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble');
   ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;});
+  document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
 async function send(){const t=document.getElementById('msg');const v=t.value;if(!v.trim())return;
@@ -199,6 +223,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, page, "text/html")
         elif self.path == "/messages":
             self._send(200, json.dumps(parse_chat(read_section(self._board(), "Chat"))))
+        elif self.path == "/status":
+            self._send(200, json.dumps(chat_status(self.server.project)))
         else:
             self._send(404, "{}")
 

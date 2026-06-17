@@ -91,6 +91,21 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertTrue(any(m["speaker"] == "Jack" and "hello from the web" in m["text"]
                             for m in msgs))
 
+    def test_status_reports_typing_agents(self):
+        pathlib.Path(self.tmp, ".collab", "chat_typing.json").write_text(json.dumps({
+            "agents": {"Claude": {"status": "thinking", "since": cw.now_str(), "message_id": "abc"}}
+        }))
+
+        status = json.loads(self._get("/status"))
+
+        self.assertEqual(status["typing"], ["Claude"])
+
+    def test_index_polls_status_for_typing_indicator(self):
+        page = self._get("/")
+
+        self.assertIn("id=typing", page)
+        self.assertIn("/status", page)
+
 
 if __name__ == "__main__":
     unittest.main()

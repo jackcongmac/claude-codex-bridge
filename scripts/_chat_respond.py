@@ -5,10 +5,11 @@ An agent replies when ## Chat contains an unhandled message for it: a HUMAN grou
 message with no `@` (everyone replies) or a message that @-mentions it (or @All).
 On restart it scans older missed prompts before giving up, and records handled
 message ids in .collab/chat_delivery.json so offline @ messages don't sink forever
-or repeat after reconnect. An agent posting with no `@` compels no one. Never to
-itself. A consecutive-agent-turn cap breaks ping-pong (a human message resets it).
-A spawned agent that replies "PASS" stays silent. The reply is plain text posted
-back to ## Chat via the locked board write.
+with best-effort dedupe. It records .collab/chat_typing.json while a model is
+thinking so the web room can show progress. An agent posting with no `@` compels
+no one. Never to itself. A consecutive-agent-turn cap breaks ping-pong (a human
+message resets it). A spawned agent that replies "PASS" stays silent. The reply
+is plain text posted back to ## Chat via the locked board write.
 
 CLI: _chat_respond.py once --self <Agent> [--project DIR] [--max-turns N]
 """
@@ -72,6 +73,10 @@ def _delivery_path(project):
     return collab_paths(project)["chat_delivery"]
 
 
+def _typing_path(project):
+    return collab_paths(project)["chat_typing"]
+
+
 def _load_delivery(project):
     return read_json(_delivery_path(project), default={"agents": {}, "messages": {}}) or {"agents": {}, "messages": {}}
 
@@ -96,6 +101,38 @@ def _mark_delivery(project, self_name, msg, status):
         agent = delivery.setdefault("agents", {}).setdefault(self_name, {"handled": {}})
         agent.setdefault("handled", {})[mid] = {"status": status, "at": now_str()}
         atomic_write_json(_delivery_path(project), delivery)
+    finally:
+        release_lock(p["lock"])
+
+
+def _load_typing(project):
+    return read_json(_typing_path(project), default={"agents": {}}) or {"agents": {}}
+
+
+def _set_typing(project, self_name, msg):
+    p = collab_paths(project)
+    if not acquire_lock(p["lock"], "chat-typing-%d" % os.getpid(), ttl=30, wait=10):
+        return
+    try:
+        state = _load_typing(project)
+        state.setdefault("agents", {})[self_name] = {
+            "status": "thinking",
+            "message_id": _message_id(msg),
+            "since": now_str(),
+        }
+        atomic_write_json(_typing_path(project), state)
+    finally:
+        release_lock(p["lock"])
+
+
+def _clear_typing(project, self_name):
+    p = collab_paths(project)
+    if not acquire_lock(p["lock"], "chat-typing-%d" % os.getpid(), ttl=30, wait=10):
+        return
+    try:
+        state = _load_typing(project)
+        state.setdefault("agents", {}).pop(self_name, None)
+        atomic_write_json(_typing_path(project), state)
     finally:
         release_lock(p["lock"])
 
@@ -228,7 +265,11 @@ def respond_once(project, self_name, max_turns=6, runner=None):
             break
     if streak >= max_turns:
         return "capped"
-    reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs, prompt_msg), project) or "").strip()
+    _set_typing(project, self_name, prompt_msg)
+    try:
+        reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs, prompt_msg), project) or "").strip()
+    finally:
+        _clear_typing(project, self_name)
     if not reply or reply.upper() == "PASS":
         _mark_delivery(project, self_name, prompt_msg, "passed")
         return "passed"

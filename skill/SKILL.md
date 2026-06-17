@@ -100,8 +100,10 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    handled chat message ids in `<root>/.collab/chat_delivery.json`, so if one agent
    was offline it can replay missed @ messages on restart with best-effort dedupe.
    Delivery is at-least-once: a crash after posting a reply but before recording
-   handled state can re-answer that one message. Closing the server stops them.
-   Pass `--no-responders` to launch the window only.
+   handled state can re-answer that one message. While an agent is generating, the
+   web room shows it as "正在思考" from `<root>/.collab/chat_typing.json`; stale typing
+   entries age out automatically. Closing the server stops them. Pass
+   `--no-responders` to launch the window only.
 3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
    no `@` from you = **both reply** (it's a group message to the room). Agents can @ each

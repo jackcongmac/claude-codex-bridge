@@ -88,6 +88,11 @@ This is at-least-once delivery: a crash between posting a reply and recording ha
 state can re-answer that one message. Current message ids are derived from timestamp,
 speaker, and text, so same-second duplicate text from the same speaker can collide.
 
+**Group chat thinking indicator.** `_chat_respond.py` writes `.collab/chat_typing.json`
+while an agent is generating; `bridge-chat-web.py` exposes `/status` and renders a
+compact "正在思考" line. Stale typing entries are hidden by age so a crashed responder
+does not pin the UI forever.
+
 **Resource routing + dashboards.** Role presets (`apply-role-preset.py`),
 `bridge-status.py` (`--watch`). **Token control:** `compact-collaboration.sh` /
 `_compact.py` archive-rotate the board losslessly under lock.
