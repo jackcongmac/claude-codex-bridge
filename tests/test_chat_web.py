@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import socket
 import sys
 import tempfile
 import threading
@@ -184,6 +185,40 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=typing", page)
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
+
+
+class ServerStartupTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        collab = pathlib.Path(self.tmp) / ".collab"
+        collab.mkdir()
+        (collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        (collab / "collaboration.md").write_text("# Board\n")
+
+    def _busy_port(self):
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return sock, sock.getsockname()[1]
+
+    def test_default_server_falls_back_when_preferred_port_is_busy(self):
+        sock, busy_port = self._busy_port()
+        try:
+            httpd, port = cw.make_server_with_default_fallback(self.tmp, "Jack", busy_port)
+            try:
+                self.assertNotEqual(port, busy_port)
+            finally:
+                httpd.server_close()
+        finally:
+            sock.close()
+
+    def test_strict_server_keeps_explicit_busy_port_failure(self):
+        sock, busy_port = self._busy_port()
+        try:
+            with self.assertRaises(OSError):
+                cw.make_server(self.tmp, "Jack", busy_port)
+        finally:
+            sock.close()
 
 
 if __name__ == "__main__":

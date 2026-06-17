@@ -9,6 +9,7 @@ board-wait. Pure stdlib — no install, no deps.
 CLI: bridge-chat-web.py [--self <Me>] [--project DIR] [--port N] [--no-open]
 """
 import argparse
+import errno
 import html
 import http.server
 import json
@@ -436,16 +437,28 @@ def make_server(project, self_name, port):
     return httpd, httpd.server_address[1]
 
 
+def make_server_with_default_fallback(project, self_name, preferred_port=8765):
+    try:
+        return make_server(project, self_name, preferred_port)
+    except OSError as e:
+        if e.errno != errno.EADDRINUSE:
+            raise
+        return make_server(project, self_name, 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--self", dest="self_name", default="Human")
     ap.add_argument("--project", default=None)
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--no-responders", action="store_true",
                     help="don't auto-start the Claude/Codex chat responders")
     a = ap.parse_args()
-    httpd, port = make_server(a.project, a.self_name, a.port)
+    if a.port is None:
+        httpd, port = make_server_with_default_fallback(a.project, a.self_name)
+    else:
+        httpd, port = make_server(a.project, a.self_name, a.port)
     url = "http://127.0.0.1:%d" % port
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
     responders = [] if a.no_responders else start_responders(httpd.project)
