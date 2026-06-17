@@ -89,6 +89,14 @@ class RespondOnceTests(unittest.TestCase):
         self.assertEqual(self._run("Claude", reply="PASS"), "passed")
         self.assertNotIn("**Claude:**", self._chat_text())
 
+    def test_passed_prompt_is_not_reselected_after_restart(self):
+        self._set_chat([("Jack", "@Claude anything?")])
+
+        self.assertEqual(self._run("Claude", reply="PASS"), "passed")
+        self.assertEqual(self._run("Claude", reply="duplicate"), "not-addressed")
+
+        self.assertNotIn("duplicate", self._chat_text())
+
     def test_empty_chat_is_noop(self):
         (self.collab / "collaboration.md").write_text("# Board\n")
         self.assertEqual(self._run("Claude"), "empty")

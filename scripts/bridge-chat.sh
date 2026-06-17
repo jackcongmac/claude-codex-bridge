@@ -10,18 +10,22 @@
 #   bridge-chat.sh --self <Me> --message "…"    # post a line to the chat
 #   bridge-chat.sh                              # print the thread once
 #   bridge-chat.sh --watch [--interval N]       # live-tail the thread
+#   bridge-chat.sh --self <Me> --interactive    # terminal chat; Esc exits
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/bridge-paths.sh"
 
-SELF=""; PROJECT="$PWD"; MESSAGE=""; WATCH=0; INTERVAL="${BRIDGE_CHAT_INTERVAL:-2}"
+SELF=""; PROJECT="$PWD"; MESSAGE=""; WATCH=0; INTERACTIVE=0; NO_RESPONDERS=0
+INTERVAL="${BRIDGE_CHAT_INTERVAL:-2}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
     --project) PROJECT="$2"; shift 2;;
     --message) MESSAGE="$2"; shift 2;;
     --watch) WATCH=1; shift;;
+    --interactive) INTERACTIVE=1; shift;;
+    --no-responders) NO_RESPONDERS=1; shift;;
     --interval) INTERVAL="$2"; shift 2;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
@@ -31,6 +35,13 @@ bridge_resolve "$PROJECT"; PROJECT="$BRIDGE_ROOT"; COLLAB="$BRIDGE_COLLAB"
 PY3="$(command -v python3)"
 BOARD="$COLLAB/collaboration.md"
 SIGNAL="$COLLAB/collaboration_signal.json"
+
+if [ "$INTERACTIVE" = "1" ]; then
+  [ -n "$SELF" ] || { echo "[x] --self <Me> required for --interactive" >&2; exit 2; }
+  ARGS=(--self "$SELF" --project "$PROJECT" --interval "$INTERVAL")
+  [ "$NO_RESPONDERS" = "1" ] && ARGS+=(--no-responders)
+  exec "$PY3" "$HERE/bridge-chat-tui.py" "${ARGS[@]}"
+fi
 
 # POST a line — delegate to the locked transactional write, under the shared ## Chat
 # section, prefixed with the speaker so the thread reads like a chat.

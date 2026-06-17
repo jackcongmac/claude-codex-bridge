@@ -93,6 +93,11 @@ while an agent is generating; `bridge-chat-web.py` exposes `/status` and renders
 compact "正在思考" line. Stale typing entries are hidden by age so a crashed responder
 does not pin the UI forever.
 
+**Terminal virtual group chat.** `bridge-chat.sh --interactive` runs a no-browser
+chat panel in the current terminal, posting to the same `## Chat` board thread and
+exiting on `Esc`. In a real TTY it reads single keys; in non-TTY automation it accepts
+line input and `/exit`.
+
 **Group chat responder supervision.** While `bridge-chat-web.py` is serving a room, it
 keeps one Claude responder and one Codex responder in order and restarts a responder
 whose process exits. This is bounded to the web server lifetime; a full always-on

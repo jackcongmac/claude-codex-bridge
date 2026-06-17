@@ -88,11 +88,24 @@ this project reads the root `AGENTS.md`/`CLAUDE.md` and joins.
 ## Open the group chat (trigger: "群聊" / "group chat")
 
 When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open group chat"**
-(or clearly asks for the shared chat room), LAUNCH the web group chat:
+(or clearly asks for the shared chat room), launch the terminal virtual chat by
+default. It stays inside the current session/terminal and does not open a browser:
 
 1. Resolve the bridge scripts dir (first line of `~/.claude-codex-bridge/scripts_path`),
    and the project root (it needs a `.collab/` board — offer to init one if absent).
-2. Run it in the background:
+2. Run:
+   `"$SCRIPTS/bridge-chat.sh" --self <the user's name, e.g. Jack> --project "<root>" --interactive`
+   It shows the shared `## Chat` board thread as a terminal chat panel, sends on
+   Enter, exits on `Esc`, and **auto-starts the Claude + Codex chat responders** so
+   the room is live immediately. Pass `--no-responders` only for testing or a
+   read-only human-facing panel.
+3. Tell the user: **use the terminal chat.** Type `@` manually to address Claude /
+   Codex / `@All`; no `@` from the human = both reply. `Esc` exits the chat panel
+   without deleting the board thread.
+
+Optional browser view:
+
+1. If the user explicitly asks for a browser/window UI, run it in the background:
    `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
    It serves a local window, opens the browser at `http://127.0.0.1:8765`, and
    **auto-starts the Claude + Codex chat responders** so the room is live immediately
@@ -105,7 +118,7 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    entries age out automatically. While the room stays open, the web server restarts
    a responder if that responder process exits; closing the server stops them. Pass
    `--no-responders` to launch the window only.
-3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
+2. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
    no `@` from you = **both reply** (it's a group message to the room). Agents can @ each
    other too — but an agent posting with no `@` compels no one (a consecutive-agent-turn

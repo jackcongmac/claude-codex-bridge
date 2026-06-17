@@ -204,6 +204,16 @@ a simple, durable convention that turns two agents into colleagues:
   `thinking` while Claude/Codex is generating a reply, and the web chat hides stale
   entries automatically if a responder dies before clearing them.
 
+For the simplest "virtual chat board" in the current terminal, run:
+
+```bash
+scripts/bridge-chat.sh --self Jack --interactive
+```
+
+It posts to the same `## Chat` board thread, starts the Claude/Codex responders by
+default, sends on Enter, and exits on `Esc` without opening a browser. The older
+`--watch` mode remains read-only live tailing.
+
 When the web group chat is open, it starts one responder for Claude and one for Codex
 and lightly supervises them: if a responder process exits while the room is still open,
 the server starts that responder again. This is scoped to the chat server lifetime; it

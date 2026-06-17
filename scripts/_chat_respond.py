@@ -183,7 +183,7 @@ def _select_prompt(msgs, self_name, handled=None):
     latest = msgs[-1]
     if latest["speaker"] == self_name:
         return None, "self"
-    if self_name in _targets(latest):
+    if self_name in _targets(latest) and _message_id(latest) not in handled:
         return latest, None
     if latest["speaker"] not in AGENTS or _targets(latest):
         return None, "not-addressed"
@@ -194,7 +194,7 @@ def _select_prompt(msgs, self_name, handled=None):
             spoke_after = True
         if msg["speaker"] in AGENTS and not _targets(msg):
             continue
-        if self_name in _targets(msg) and not spoke_after:
+        if self_name in _targets(msg) and not spoke_after and _message_id(msg) not in handled:
             return msg, None
         return None, "not-addressed"
     return None, "not-addressed"
