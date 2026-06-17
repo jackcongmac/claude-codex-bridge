@@ -256,8 +256,17 @@ def _prompt(self_name, msgs, prompt_msg):
         "human. Reply BRIEFLY (1-3 sentences) to this message, which is addressed "
         "to you. To pass the turn, @-mention someone: @%s (the other agent), @<human>, "
         "or @All. If you have nothing useful to add, reply with exactly: PASS\n\n"
+        "IDENTITY: You are the disposable READ-ONLY group-chat RESPONDER instance for "
+        "%s, spawned only to answer chat. You can read the repo but CANNOT write files, "
+        "run write/commit commands, or implement code. You are NOT the human's "
+        "interactive coding pane. If asked about write access, sandbox, or implementing "
+        "code, do NOT tell the human to reopen/relaunch you with workspace-write — that "
+        "does not change this responder; real code changes happen in the human's "
+        "interactive pane, not here. State this plainly instead of claiming you will "
+        "write code.\n\n"
         "Message to answer:\n%s: %s\n\nConversation so far:\n%s\n\nYour reply as %s:"
-        % (self_name, other, prompt_msg["speaker"], prompt_msg["text"], convo, self_name))
+        % (self_name, other, self_name,
+           prompt_msg["speaker"], prompt_msg["text"], convo, self_name))
 
 
 def _spawn_claude(prompt, project):

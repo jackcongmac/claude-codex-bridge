@@ -318,5 +318,34 @@ class RespondOnceTests(unittest.TestCase):
         self.assertNotIn("Claude", state.get("agents", {}))
 
 
+class PromptIdentityTests(unittest.TestCase):
+    """The chat responder spawns a disposable, read-only subprocess per reply. Its prompt
+    must tell that instance it IS the read-only group-chat responder (not the human's
+    interactive coding pane) so it stops giving the misleading 'reopen me with
+    workspace-write' advice that conflated the two and burned a day of debugging."""
+
+    def _prompt(self, who):
+        msgs = [{"speaker": "Jack", "text": "are you full access now?"}]
+        return cr._prompt(who, msgs, msgs[-1])
+
+    def test_codex_prompt_declares_read_only_responder_identity(self):
+        p = self._prompt("Codex").lower()
+        self.assertIn("read-only", p)
+        self.assertIn("responder", p)
+
+    def test_claude_prompt_declares_read_only_responder_identity(self):
+        p = self._prompt("Claude").lower()
+        self.assertIn("read-only", p)
+        self.assertIn("responder", p)
+
+    def test_prompt_forbids_advising_reopen_for_write_access(self):
+        # The instruction must steer the responder away from telling the human to
+        # relaunch/reopen this instance to gain write access, and point at the
+        # interactive pane as where code changes actually happen.
+        p = self._prompt("Codex").lower()
+        self.assertIn("reopen", p)
+        self.assertIn("interactive", p)
+
+
 if __name__ == "__main__":
     unittest.main()
