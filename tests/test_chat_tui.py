@@ -1,6 +1,8 @@
 import json
+import importlib.util
 import pathlib
 import subprocess
+import sys
 import unittest
 
 
@@ -8,7 +10,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 CHAT = SCRIPTS / "bridge-chat.sh"
 
-import importlib.util
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from bridge_common import now_str  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location("chattui", SCRIPTS / "bridge-chat-tui.py")
 ct = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ct)
@@ -44,6 +49,17 @@ class BridgeChatTuiTests(unittest.TestCase):
 
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn("should not post", self._board())
+
+    def test_interactive_line_mode_shows_typing_agents(self):
+        (self.collab / "chat_typing.json").write_text(json.dumps({
+            "agents": {"Claude": {"status": "thinking", "since": now_str(), "message_id": "m1"}}
+        }))
+
+        r = self._chat("--self", "Jack", "--interactive", "--no-responders",
+                       stdin="/exit\n")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Claude 正在思考", r.stdout)
 
 
 class ChatTuiDocsTests(unittest.TestCase):
