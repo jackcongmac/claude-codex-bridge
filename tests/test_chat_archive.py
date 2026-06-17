@@ -2,6 +2,8 @@ import importlib.util
 import json
 import pathlib
 import tempfile
+import threading
+import time
 import unittest
 
 
@@ -207,6 +209,44 @@ class ResponderLaunchTests(unittest.TestCase):
         self.assertTrue(event.set_called)
         self.assertTrue(supervisor.joined)
         self.assertEqual(stopped, ["replacement"])
+
+    def test_supervisor_replacement_is_stopped_on_shutdown(self):
+        class H:
+            def __init__(self, name, code=None):
+                self.name = name
+                self.code = code
+
+            def poll(self):
+                return self.code
+
+        dead = H("dead", code=1)
+        live = H("live")
+        spawned = []
+
+        def spawn(cmd):
+            h = H("new-" + cmd[cmd.index("--self") + 1])
+            spawned.append(h)
+            return h
+
+        handles = [dead, live]
+        stop_event = threading.Event()
+        supervisor = threading.Thread(
+            target=cw.supervise_responders,
+            args=(handles, "/proj", stop_event),
+            kwargs={"interval": 0.01, "scripts_dir": "/s", "spawn": spawn},
+            daemon=True)
+        supervisor.start()
+        deadline = time.time() + 1.0
+        while not spawned and time.time() < deadline:
+            time.sleep(0.01)
+
+        stopped = []
+        cw.shutdown_supervised_responders(
+            handles, stop_event, supervisor, join_timeout=1.0,
+            stop=lambda hs: stopped.extend(hs))
+
+        self.assertTrue(spawned)
+        self.assertEqual([h.name for h in stopped], ["new-Claude", "live"])
 
 
 class SkillTriggerTests(unittest.TestCase):
