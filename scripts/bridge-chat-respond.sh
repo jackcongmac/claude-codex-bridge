@@ -4,11 +4,14 @@
 #
 # This is what makes the group chat REAL-TIME. Run it in the BACKGROUND once per
 # agent (Claude, Codex). It watches collaboration_signal.json; whenever the board
-# changes, it runs one responder pass: if the LATEST ## Chat message is from
-# someone else AND targets this agent — a human group message with no @ (everyone
-# replies), or an explicit @this-agent / @All — it spawns the agent to write a brief
-# reply and posts it back to ## Chat. An agent posting with no @ compels no one.
-# Never replies to itself; a
+# changes, it runs one responder pass: if ## Chat has an unhandled message for this
+# agent — a human group message with no @ (everyone replies), or an explicit
+# @this-agent / @All — it spawns the agent to write a brief reply and posts it back
+# to ## Chat. On restart it scans older missed prompts and records handled message
+# ids in .collab/chat_delivery.json, giving best-effort dedupe. Delivery is
+# at-least-once: a crash after posting a reply but before recording handled state can
+# re-answer that one message. An agent posting with no @ compels no one. Never replies
+# to itself; a
 # consecutive-agent-turn cap (default 6, --max-turns) breaks ping-pong until a
 # human posts again.
 #

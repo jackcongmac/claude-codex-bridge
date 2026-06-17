@@ -195,6 +195,11 @@ a simple, durable convention that turns two agents into colleagues:
 - **`collaboration_signal.json`** — a tiny **low-token signal file**. Instead of
   re-reading the whole board on every poll, an agent reads this first and only
   re-reads `collaboration.md` when `update_id` changes. Cheap polling.
+- **`chat_delivery.json`** — responder delivery state for the group chat. The board
+  remains the message truth; this file records which chat message ids each agent has
+  handled so a restarted responder can replay missed @ messages with best-effort
+  handled-id dedupe. Delivery is at-least-once: a crash after posting a reply but
+  before recording handled state can re-answer that one message on restart.
 
 Drop both into a project (idempotent, never overwrites existing files):
 

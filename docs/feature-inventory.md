@@ -81,6 +81,13 @@ mechanized governance — role gates + reviewer-verdict validation + lock/CAS.)
 **Multi-agent queue mode.** `_queue_turn.py`: N agents claim work-queue tasks under
 lock with epoch fencing.
 
+**Group chat delivery resync.** `_chat_respond.py`: responders scan unhandled chat
+messages on startup and write per-agent handled ids to `.collab/chat_delivery.json`,
+so an offline agent can replay missed @ messages with best-effort handled-id dedupe.
+This is at-least-once delivery: a crash between posting a reply and recording handled
+state can re-answer that one message. Current message ids are derived from timestamp,
+speaker, and text, so same-second duplicate text from the same speaker can collide.
+
 **Resource routing + dashboards.** Role presets (`apply-role-preset.py`),
 `bridge-status.py` (`--watch`). **Token control:** `compact-collaboration.sh` /
 `_compact.py` archive-rotate the board losslessly under lock.

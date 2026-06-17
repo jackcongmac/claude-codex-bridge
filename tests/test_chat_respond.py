@@ -147,6 +147,36 @@ class RespondOnceTests(unittest.TestCase):
         self.assertGreater(board.index("live reply"), board.index("## Chat\n"))  # under live Chat
         self.assertLess(board.index("old archived stuff"), board.index("## Chat\n"))  # archive intact
 
+    def test_resync_answers_missed_older_prompt_when_latest_targets_someone_else(self):
+        # Claude was offline while two human prompts landed. On restart, latest is
+        # for Codex, but Claude's earlier @ message must not sink forever.
+        self._set_chat([("Jack", "@Claude first"), ("Jack", "@Codex second")])
+
+        self.assertEqual(self._run("Claude", reply="answer first"), "responded")
+
+        board = self._chat_text()
+        self.assertIn("**Claude:** answer first", board)
+        delivery = json.loads((self.collab / "chat_delivery.json").read_text())
+        self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
+
+    def test_resync_does_not_repeat_a_delivered_missed_prompt_after_restart(self):
+        self._set_chat([("Jack", "@Claude first"), ("Jack", "@Codex second")])
+
+        self.assertEqual(self._run("Claude", reply="answer first"), "responded")
+        self._run("Claude", reply="duplicate")
+
+        self.assertNotIn("duplicate", self._chat_text())
+
+    def test_resync_continues_to_later_unhandled_group_prompt_after_missed_reply(self):
+        self._set_chat([("Jack", "@Claude first"), ("Jack", "team standup")])
+
+        self.assertEqual(self._run("Claude", reply="answer first"), "responded")
+        self.assertEqual(self._run("Claude", reply="answer standup"), "responded")
+
+        board = self._chat_text()
+        self.assertIn("answer first", board)
+        self.assertIn("answer standup", board)
+
 
 if __name__ == "__main__":
     unittest.main()

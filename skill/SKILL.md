@@ -96,8 +96,12 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
    It serves a local window, opens the browser at `http://127.0.0.1:8765`, and
    **auto-starts the Claude + Codex chat responders** so the room is live immediately
-   (each responder spawns its agent to reply when @-mentioned). Closing the server
-   stops them. Pass `--no-responders` to launch the window only.
+   (each responder spawns its agent to reply when @-mentioned). Responders record
+   handled chat message ids in `<root>/.collab/chat_delivery.json`, so if one agent
+   was offline it can replay missed @ messages on restart with best-effort dedupe.
+   Delivery is at-least-once: a crash after posting a reply but before recording
+   handled state can re-answer that one message. Closing the server stops them.
+   Pass `--no-responders` to launch the window only.
 3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
    no `@` from you = **both reply** (it's a group message to the room). Agents can @ each

@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """_chat_respond.py — the group-chat auto-responder (one pass).
 
-An agent replies when the LATEST ## Chat message is from someone else AND is either
-a HUMAN group message with no `@` (everyone replies) or @-mentions it (or @All). An
-agent posting with no `@` compels no one. Never to itself. A consecutive-agent-turn
-cap breaks ping-pong (a human message resets it). A spawned agent that replies "PASS"
-stays silent. The reply is plain text posted back to ## Chat via the locked board write.
+An agent replies when ## Chat contains an unhandled message for it: a HUMAN group
+message with no `@` (everyone replies) or a message that @-mentions it (or @All).
+On restart it scans older missed prompts before giving up, and records handled
+message ids in .collab/chat_delivery.json so offline @ messages don't sink forever
+or repeat after reconnect. An agent posting with no `@` compels no one. Never to
+itself. A consecutive-agent-turn cap breaks ping-pong (a human message resets it).
+A spawned agent that replies "PASS" stays silent. The reply is plain text posted
+back to ## Chat via the locked board write.
 
 CLI: _chat_respond.py once --self <Agent> [--project DIR] [--max-turns N]
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -19,7 +23,10 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bridge_common import collab_paths, find_project_root  # noqa: E402
+from bridge_common import (  # noqa: E402
+    collab_paths, find_project_root, read_json, atomic_write_json, now_str,
+    acquire_lock, release_lock,
+)
 from _post import post as _board_post  # noqa: E402
 
 # reuse parse_chat + mentions from the (hyphen-named) web-chat module
@@ -56,6 +63,43 @@ def _same_msg(a, b):
     return a is not None and b is not None and tuple(a.get(k) for k in _KEY) == tuple(b.get(k) for k in _KEY)
 
 
+def _message_id(msg):
+    raw = json.dumps([msg.get(k, "") for k in _KEY], ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _delivery_path(project):
+    return collab_paths(project)["chat_delivery"]
+
+
+def _load_delivery(project):
+    return read_json(_delivery_path(project), default={"agents": {}, "messages": {}}) or {"agents": {}, "messages": {}}
+
+
+def _handled_ids(delivery, self_name):
+    return set((delivery.get("agents", {}).get(self_name, {}).get("handled", {}) or {}).keys())
+
+
+def _mark_delivery(project, self_name, msg, status):
+    p = collab_paths(project)
+    if not acquire_lock(p["lock"], "chat-delivery-%d" % os.getpid(), ttl=30, wait=10):
+        return
+    try:
+        delivery = _load_delivery(project)
+        mid = _message_id(msg)
+        delivery.setdefault("messages", {})[mid] = {
+            "ts": msg.get("ts", ""),
+            "speaker": msg.get("speaker", ""),
+            "text": msg.get("text", ""),
+            "targets": sorted(_targets(msg)),
+        }
+        agent = delivery.setdefault("agents", {}).setdefault(self_name, {"handled": {}})
+        agent.setdefault("handled", {})[mid] = {"status": status, "at": now_str()}
+        atomic_write_json(_delivery_path(project), delivery)
+    finally:
+        release_lock(p["lock"])
+
+
 def _targets(msg):
     """Who MUST reply to this message:
     - a HUMAN message with NO @ is a group message → everyone (both agents) replies;
@@ -69,14 +113,36 @@ def _targets(msg):
     return who
 
 
-def _select_prompt(msgs, self_name):
+def _self_spoke_after(msgs, idx, self_name):
+    return any(m["speaker"] == self_name for m in msgs[idx + 1:])
+
+
+def _select_pending_prompt(msgs, self_name, handled):
+    infer_handled_from_board = not handled
+    for idx, msg in enumerate(msgs):
+        if msg["speaker"] == self_name:
+            continue
+        if _message_id(msg) in handled:
+            continue
+        if (self_name in _targets(msg)
+                and not (infer_handled_from_board and _self_spoke_after(msgs, idx, self_name))):
+            return msg
+    return None
+
+
+def _select_prompt(msgs, self_name, handled=None):
     """Return (prompt_msg, status) for the current pass.
 
     Normally the latest message is the prompt. The exception is trailing agent chatter
     with no @: that can be the first responder's answer to a human group message. A
     delayed second responder must still answer the original prompt unless it already
-    spoke after that prompt.
+    spoke after that prompt. A durable handled set lets a restarted responder scan
+    older missed prompts so an offline @ message does not sink behind later chat.
     """
+    handled = handled or set()
+    pending = _select_pending_prompt(msgs, self_name, handled)
+    if pending is not None:
+        return pending, None
     latest = msgs[-1]
     if latest["speaker"] == self_name:
         return None, "self"
@@ -150,7 +216,8 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     if not msgs:
         return "empty"
     latest = msgs[-1]
-    prompt_msg, status = _select_prompt(msgs, self_name)
+    delivery = _load_delivery(project)
+    prompt_msg, status = _select_prompt(msgs, self_name, _handled_ids(delivery, self_name))
     if status:
         return status
     streak = 0                                  # consecutive trailing agent messages
@@ -163,6 +230,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         return "capped"
     reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs, prompt_msg), project) or "").strip()
     if not reply or reply.upper() == "PASS":
+        _mark_delivery(project, self_name, prompt_msg, "passed")
         return "passed"
     # Spawning the agent took seconds. If a newer message landed meanwhile, this reply
     # is stale — drop it rather than bury the new message under our answer. The guard
@@ -189,7 +257,10 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     # "lockbusy" means NOTHING was written — surface it so the loop retries this
     # message instead of advancing past it. "ok"/"signal_failed" both leave the reply
     # on the board (signal_failed just missed the wake, which the next bump fixes).
-    return "lockbusy" if st == "lockbusy" else "responded"
+    if st == "lockbusy":
+        return "lockbusy"
+    _mark_delivery(project, self_name, prompt_msg, "responded")
+    return "responded"
 
 
 def main():
