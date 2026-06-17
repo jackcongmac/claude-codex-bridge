@@ -93,6 +93,23 @@ def run_line_mode(project, self_name):
     return 0
 
 
+def consume_escape_sequence(stream, timeout=0.03, select_fn=select.select):
+    """Return True if bytes after ESC look like a terminal escape sequence.
+
+    Arrow/function keys start with ESC and then more bytes. A lone Esc has no immediate
+    follow-up byte, so it remains the chat-exit key.
+    """
+    ready, _, _ = select_fn([stream], [], [], timeout)
+    if not ready:
+        return False
+    while ready:
+        ch = stream.read(1)
+        if ch.isalpha() or ch == "~":
+            break
+        ready, _, _ = select_fn([stream], [], [], 0)
+    return True
+
+
 def run_tty(project, self_name, interval):
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
@@ -111,6 +128,8 @@ def run_tty(project, self_name, interval):
                 continue
             ch = sys.stdin.read(1)
             if ch == "\x1b":
+                if consume_escape_sequence(sys.stdin):
+                    continue
                 break
             if ch in ("\x03", "\x04"):
                 break

@@ -8,6 +8,11 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 CHAT = SCRIPTS / "bridge-chat.sh"
 
+import importlib.util
+_spec = importlib.util.spec_from_file_location("chattui", SCRIPTS / "bridge-chat-tui.py")
+ct = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(ct)
+
 
 class BridgeChatTuiTests(unittest.TestCase):
     def setUp(self):
@@ -48,6 +53,33 @@ class ChatTuiDocsTests(unittest.TestCase):
         self.assertIn("bridge-chat.sh", text)
         self.assertIn("--interactive", text)
         self.assertIn("Esc", text)
+
+
+class ChatTuiKeyTests(unittest.TestCase):
+    def test_lone_escape_is_not_an_escape_sequence(self):
+        class In:
+            pass
+
+        def select_fn(r, w, x, timeout):
+            return [], [], []
+
+        self.assertFalse(ct.consume_escape_sequence(In(), select_fn=select_fn))
+
+    def test_arrow_key_escape_sequence_is_consumed(self):
+        class In:
+            def __init__(self):
+                self.chars = list("[A")
+
+            def read(self, n):
+                return self.chars.pop(0)
+
+        fake = In()
+
+        def select_fn(r, w, x, timeout):
+            return ([fake] if fake.chars else []), [], []
+
+        self.assertTrue(ct.consume_escape_sequence(fake, select_fn=select_fn))
+        self.assertEqual(fake.chars, [])
 
 
 if __name__ == "__main__":
