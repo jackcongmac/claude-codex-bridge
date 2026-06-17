@@ -91,7 +91,8 @@ speaker, and text, so same-second duplicate text from the same speaker can colli
 **Group chat thinking indicator.** `_chat_respond.py` writes `.collab/chat_typing.json`
 while an agent is generating; `bridge-chat-web.py` exposes `/status` and renders a
 compact "正在思考" line. Stale typing entries are hidden by age so a crashed responder
-does not pin the UI forever.
+does not pin the UI forever. The same status payload now reports Claude/Codex responder
+online/offline health, shown in both the web room and terminal panel.
 
 **Terminal virtual group chat.** `bridge-chat.sh --interactive` runs a no-browser
 chat panel in the current terminal, posting to the same `## Chat` board thread and

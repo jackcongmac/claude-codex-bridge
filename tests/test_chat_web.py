@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -115,10 +116,21 @@ class ServerRoundTripTests(unittest.TestCase):
 
         self.assertEqual(status["typing"], ["Claude"])
 
+    def test_status_reports_responder_health(self):
+        pathlib.Path(self.tmp, ".collab", ".chatrespond_Claude.pid").write_text(str(os.getpid()))
+
+        status = json.loads(self._get("/status"))
+
+        self.assertEqual(status["responders"], [
+            {"name": "Claude", "alive": True},
+            {"name": "Codex", "alive": False},
+        ])
+
     def test_index_polls_status_for_typing_indicator(self):
         page = self._get("/")
 
         self.assertIn("id=typing", page)
+        self.assertIn("id=presence", page)
         self.assertIn("/status", page)
 
 

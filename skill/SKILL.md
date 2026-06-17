@@ -97,7 +97,8 @@ default. It stays inside the current session/terminal and does not open a browse
    `"$SCRIPTS/bridge-chat.sh" --self <the user's name, e.g. Jack> --project "<root>" --interactive`
    It shows the shared `## Chat` board thread as a terminal chat panel, sends on
    Enter, exits on `Esc`, and **auto-starts the Claude + Codex chat responders** so
-   the room is live immediately. Pass `--no-responders` only for testing or a
+   the room is live immediately. It also shows whether the Claude/Codex responders
+   currently look online or offline. Pass `--no-responders` only for testing or a
    read-only human-facing panel.
 3. Tell the user: **use the terminal chat.** Type `@` manually to address Claude /
    Codex / `@All`; no `@` from the human = both reply. `Esc` exits the chat panel
@@ -115,9 +116,10 @@ Optional browser view:
    Delivery is at-least-once: a crash after posting a reply but before recording
    handled state can re-answer that one message. While an agent is generating, the
    web room shows it as "正在思考" from `<root>/.collab/chat_typing.json`; stale typing
-   entries age out automatically. While the room stays open, the web server restarts
-   a responder if that responder process exits; closing the server stops them. Pass
-   `--no-responders` to launch the window only.
+   entries age out automatically. The status area also shows responder online/offline
+   health. While the room stays open, the web server restarts a responder if that
+   responder process exits; closing the server stops them. Pass `--no-responders` to
+   launch the window only.
 2. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,
    no `@` from you = **both reply** (it's a group message to the room). Agents can @ each

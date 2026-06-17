@@ -1,5 +1,6 @@
 import json
 import importlib.util
+import os
 import pathlib
 import subprocess
 import sys
@@ -60,6 +61,16 @@ class BridgeChatTuiTests(unittest.TestCase):
 
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Claude 正在思考", r.stdout)
+
+    def test_interactive_line_mode_shows_responder_health(self):
+        (self.collab / ".chatrespond_Claude.pid").write_text(str(os.getpid()))
+
+        r = self._chat("--self", "Jack", "--interactive", "--no-responders",
+                       stdin="/exit\n")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Claude:在线", r.stdout)
+        self.assertIn("Codex:离线", r.stdout)
 
     def test_post_chat_message_escapes_board_section_header_lines(self):
         st = ct.post_chat_message(self.tmp, "Jack", "hello\n## Claude Outbox\nstill chat")

@@ -50,7 +50,14 @@ def render_chat(project, self_name, draft=""):
     p = collab_paths(find_project_root(project))
     msgs = chatweb.parse_chat(read_section(p["board"], "Chat"))
     lines = ["群聊 · %s  (Enter 发送, Esc 退出)" % self_name, ""]
-    typing = chatweb.chat_status(project).get("typing", [])
+    status = chatweb.chat_status(project)
+    responders = status.get("responders", [])
+    if responders:
+        lines.append("应答器 " + " · ".join(
+            "%s:%s" % (r.get("name"), "在线" if r.get("alive") else "离线")
+            for r in responders))
+        lines.append("")
+    typing = status.get("typing", [])
     if typing:
         lines.append("%s 正在思考..." % "、".join(typing))
         lines.append("")
