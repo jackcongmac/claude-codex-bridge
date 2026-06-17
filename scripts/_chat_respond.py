@@ -85,11 +85,27 @@ def _typing_path(project):
 
 
 def _load_delivery(project):
-    return read_json(_delivery_path(project), default={"agents": {}, "messages": {}}) or {"agents": {}, "messages": {}}
+    try:
+        delivery = read_json(_delivery_path(project), default={"agents": {}, "messages": {}}) or {}
+    except RuntimeError:
+        delivery = {}
+    if not isinstance(delivery, dict):
+        delivery = {}
+    if not isinstance(delivery.get("agents", {}), dict):
+        delivery["agents"] = {}
+    if not isinstance(delivery.get("messages", {}), dict):
+        delivery["messages"] = {}
+    delivery.setdefault("agents", {})
+    delivery.setdefault("messages", {})
+    return delivery
 
 
 def _handled_ids(delivery, self_name):
-    return set((delivery.get("agents", {}).get(self_name, {}).get("handled", {}) or {}).keys())
+    agent = (delivery.get("agents", {}) or {}).get(self_name, {})
+    if not isinstance(agent, dict):
+        return set()
+    handled = agent.get("handled", {}) or {}
+    return set(handled.keys()) if isinstance(handled, dict) else set()
 
 
 def _mark_delivery(project, self_name, msg, status):

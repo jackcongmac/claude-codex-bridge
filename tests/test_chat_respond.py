@@ -221,6 +221,32 @@ class RespondOnceTests(unittest.TestCase):
 
         self.assertNotIn("duplicate", self._chat_text())
 
+    def test_corrupt_delivery_state_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude recover delivery")])
+        delivery_path = self.collab / "chat_delivery.json"
+        delivery_path.write_text("{not json")
+
+        self.assertEqual(self._run("Claude", reply="delivery recovered"), "responded")
+
+        self.assertIn("**Claude:** delivery recovered", self._chat_text())
+        delivery = json.loads(delivery_path.read_text())
+        self.assertIn("messages", delivery)
+        self.assertIn("agents", delivery)
+        self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
+
+    def test_malformed_delivery_state_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude repair delivery schema")])
+        delivery_path = self.collab / "chat_delivery.json"
+        delivery_path.write_text(json.dumps({"agents": ["bad"], "messages": ["bad"]}))
+
+        self.assertEqual(self._run("Claude", reply="schema recovered"), "responded")
+
+        self.assertIn("**Claude:** schema recovered", self._chat_text())
+        delivery = json.loads(delivery_path.read_text())
+        self.assertIsInstance(delivery.get("messages"), dict)
+        self.assertIsInstance(delivery.get("agents"), dict)
+        self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
+
     def test_resync_continues_to_later_unhandled_group_prompt_after_missed_reply(self):
         self._set_chat([("Jack", "@Claude first"), ("Jack", "team standup")])
 
