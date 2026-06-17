@@ -47,8 +47,19 @@ fi
 # section, prefixed with the speaker so the thread reads like a chat.
 if [ -n "$MESSAGE" ]; then
   [ -n "$SELF" ] || { echo "[x] --self <Me> required to post" >&2; exit 2; }
+  FORMATTED="$(_HERE="$HERE" _SELF="$SELF" _MESSAGE="$MESSAGE" "$PY3" - <<'PY'
+import importlib.util
+import os
+
+path = os.path.join(os.environ["_HERE"], "bridge-chat-web.py")
+spec = importlib.util.spec_from_file_location("chatweb", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(mod.format_chat_message(os.environ["_SELF"], os.environ["_MESSAGE"]), end="")
+PY
+)"
   exec "$HERE/bridge-post.sh" --self "$SELF" --project "$PROJECT" --section "Chat" \
-    --message "**$SELF:** $MESSAGE" --summary "chat: $SELF: $MESSAGE"
+    --message "$FORMATTED" --summary "chat: $SELF: $MESSAGE"
 fi
 
 print_chat() {

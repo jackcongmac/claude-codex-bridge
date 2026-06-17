@@ -1,12 +1,16 @@
 import json
 import pathlib
 import subprocess
+import sys
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 CHAT = SCRIPTS / "bridge-chat.sh"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+from bridge_common import read_section  # noqa: E402
 
 
 class BridgeChatTests(unittest.TestCase):
@@ -64,6 +68,15 @@ class BridgeChatTests(unittest.TestCase):
         out = self._chat().stdout
         self.assertIn("### 2026-06-16 faketopic", out)
         self.assertLess(out.index("older message"), out.index("faketopic"))
+
+    def test_message_with_board_section_header_is_escaped(self):
+        r = self._chat("--self", "Jack", "--message", "hello\n## Claude Outbox\nstill chat")
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        chat = read_section(self.collab / "collaboration.md", "Chat")
+        self.assertIn("\\## Claude Outbox", chat)
+        self.assertIn("still chat", chat)
+        self.assertNotIn("\n## Claude Outbox", self._board())
 
     def test_post_requires_self(self):
         r = self._chat("--message", "orphan")
