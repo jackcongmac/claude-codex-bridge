@@ -304,7 +304,8 @@ agent commits. Idle cost is ~0 (a file watcher / mtime poll — no tokens until
 there's real work).
 
 ```bash
-# one per side (two shells / two machines); read-only by default
+# one per side: two shells on the SAME machine (or a shared filesystem) — the board
+# lives in local .collab/, not synced across machines. Read-only by default.
 scripts/watch-collaboration.sh --as claude --project .
 scripts/watch-collaboration.sh --as codex  --project .   # add --allow-write to let it edit files
 ```

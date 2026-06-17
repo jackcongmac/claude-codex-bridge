@@ -11,8 +11,10 @@
 #   watch-collaboration.sh --as claude|codex [--project DIR] [--allow-write]
 #                          [--max-turns N] [--max-cost USD] [--lock-ttl SECONDS]
 #
-# Start ONE per side (typically on the two machines / two shells driving each
-# agent). Ctrl-C to stop. SAFETY: omit --allow-write for a read-only loop.
+# Start ONE per side: two shells on the SAME machine (or a shared filesystem) driving
+# each agent — the board lives in local .collab/ and is NOT synced across machines, so
+# two independent machines would each get their own disconnected board. Ctrl-C to stop.
+# SAFETY: omit --allow-write for a read-only loop.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
