@@ -303,7 +303,13 @@ def _default_runner(self_name):
 def respond_once(project, self_name, max_turns=6, runner=None):
     """One pass: reply iff the latest message is someone else's and targets me (a human
     group message with no @, or an explicit @me / @All) and the agent-turn cap isn't hit.
-    Returns a status string (empty/self/not-addressed/capped/passed/responded)."""
+    Returns a status string (disabled/empty/self/not-addressed/capped/passed/responded)."""
+    # The disposable auto-responder is OFF by default. A read-only responder posting
+    # under the agent's own name confuses humans and the peer about who actually holds
+    # a task (platform diagnosis 2026-06-17, first cut). Real interactive panes post via
+    # bridge-chat/bridge-post and are unaffected. Opt in with BRIDGE_CHAT_AUTORESPOND=1.
+    if os.environ.get("BRIDGE_CHAT_AUTORESPOND") != "1":
+        return "disabled"
     project = find_project_root(project)
     p = collab_paths(project)
     msgs = parse_chat(_chat_section(p["board"]))

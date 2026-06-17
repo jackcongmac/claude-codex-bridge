@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import sys
 import tempfile
@@ -23,6 +24,16 @@ class RespondOnceTests(unittest.TestCase):
         self.collab = pathlib.Path(self.tmp) / ".collab"
         self.collab.mkdir()
         (self.collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        # These tests exercise the auto-responder's reply behavior, so opt it in
+        # explicitly (it is OFF by default — see AutoRespondGateTests).
+        self._prev_autorespond = os.environ.get("BRIDGE_CHAT_AUTORESPOND")
+        os.environ["BRIDGE_CHAT_AUTORESPOND"] = "1"
+
+    def tearDown(self):
+        if self._prev_autorespond is None:
+            os.environ.pop("BRIDGE_CHAT_AUTORESPOND", None)
+        else:
+            os.environ["BRIDGE_CHAT_AUTORESPOND"] = self._prev_autorespond
 
     def _set_chat(self, pairs):                       # pairs: chronological
         entries = []
@@ -316,6 +327,50 @@ class RespondOnceTests(unittest.TestCase):
         state = json.loads(typing_path.read_text())
         self.assertIsInstance(state.get("agents"), dict)
         self.assertNotIn("Claude", state.get("agents", {}))
+
+
+class AutoRespondGateTests(unittest.TestCase):
+    """First cut of the platform remediation (docs/collaboration-platform-diagnosis-2026-06-17.md):
+    the disposable chat auto-responder is OFF by default. It must not post AS the agent
+    unless explicitly opted in via BRIDGE_CHAT_AUTORESPOND=1. Real interactive panes post
+    via bridge-chat/bridge-post and are unaffected — this removes the 'a read-only responder
+    speaks with the agent's identity' confusion that cost a full day."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.collab = pathlib.Path(self.tmp) / ".collab"
+        self.collab.mkdir()
+        (self.collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        self._prev = os.environ.pop("BRIDGE_CHAT_AUTORESPOND", None)
+
+    def tearDown(self):
+        if self._prev is not None:
+            os.environ["BRIDGE_CHAT_AUTORESPOND"] = self._prev
+
+    def test_autorespond_is_disabled_by_default(self):
+        body = "# Board\n\n## Chat\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude hi\n"
+        (self.collab / "collaboration.md").write_text(body)
+        calls = {"n": 0}
+
+        def runner(prompt, project):
+            calls["n"] += 1
+            return "I should never be posted"
+
+        status = cr.respond_once(self.tmp, "Claude", runner=runner)
+
+        self.assertEqual(status, "disabled")
+        self.assertEqual(calls["n"], 0, "the model runner must not run when responder is off")
+        self.assertNotIn("**Claude:**", (self.collab / "collaboration.md").read_text())
+
+    def test_autorespond_runs_when_explicitly_enabled(self):
+        os.environ["BRIDGE_CHAT_AUTORESPOND"] = "1"
+        body = "# Board\n\n## Chat\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude hi\n"
+        (self.collab / "collaboration.md").write_text(body)
+
+        status = cr.respond_once(self.tmp, "Claude", runner=lambda p, proj: "hello back")
+
+        self.assertEqual(status, "responded")
+        self.assertIn("**Claude:** hello back", (self.collab / "collaboration.md").read_text())
 
 
 class PromptIdentityTests(unittest.TestCase):
