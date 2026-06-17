@@ -448,6 +448,22 @@ def make_server_with_default_fallback(project, self_name, preferred_port=8765):
         return make_server(project, self_name, 0)
 
 
+def serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interval,
+               shutdown=shutdown_supervised_responders):
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        shutdown(
+            responders,
+            supervisor_stop if responders else None,
+            supervisor,
+            join_timeout=supervisor_interval + 2)
+        httpd.server_close()
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--self", dest="self_name", default="Human")
@@ -480,17 +496,7 @@ def main():
             webbrowser.open(url)
         except Exception:
             pass
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        shutdown_supervised_responders(
-            responders,
-            supervisor_stop if responders else None,
-            supervisor,
-            join_timeout=supervisor_interval + 2)
-    return 0
+    return serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interval)
 
 
 if __name__ == "__main__":

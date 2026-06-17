@@ -89,11 +89,14 @@ class ServerRoundTripTests(unittest.TestCase):
         (collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
         (collab / "collaboration.md").write_text("# Board\n")
         self.httpd, self.port = cw.make_server(self.tmp, "Jack", 0)
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
         self.base = "http://127.0.0.1:%d" % self.port
 
     def tearDown(self):
         self.httpd.shutdown()
+        self.httpd.server_close()
+        self.thread.join(timeout=1)
 
     def _get(self, path):
         return urllib.request.urlopen(self.base + path, timeout=5).read().decode()
@@ -117,13 +120,16 @@ class ServerRoundTripTests(unittest.TestCase):
 
     def test_self_name_is_html_escaped(self):
         httpd, port = cw.make_server(self.tmp, "<b>x</b>", 0)
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
         try:
             page = urllib.request.urlopen("http://127.0.0.1:%d/" % port, timeout=5).read().decode()
             self.assertNotIn("<b>x</b>", page)
             self.assertIn("&lt;b&gt;x&lt;/b&gt;", page)
         finally:
             httpd.shutdown()
+            httpd.server_close()
+            thread.join(timeout=1)
 
     def test_send_then_messages_roundtrip(self):
         self._post("/send", {"text": "hello from the web"})
@@ -229,6 +235,32 @@ class ServerStartupTests(unittest.TestCase):
                 cw.make_server(self.tmp, "Jack", busy_port)
         finally:
             sock.close()
+
+
+class ServerLifecycleTests(unittest.TestCase):
+    def test_serve_chat_closes_server_after_shutdown(self):
+        class Server:
+            def __init__(self):
+                self.closed = False
+                self.served = False
+
+            def serve_forever(self):
+                self.served = True
+
+            def server_close(self):
+                self.closed = True
+
+        server = Server()
+        calls = []
+
+        status = cw.serve_chat(
+            server, responders=["r"], supervisor_stop="stop", supervisor="supervisor",
+            supervisor_interval=3, shutdown=lambda *args, **kwargs: calls.append((args, kwargs)))
+
+        self.assertEqual(status, 0)
+        self.assertTrue(server.served)
+        self.assertTrue(server.closed)
+        self.assertEqual(calls, [((["r"], "stop", "supervisor"), {"join_timeout": 5})])
 
 
 if __name__ == "__main__":
