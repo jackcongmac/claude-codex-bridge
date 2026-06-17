@@ -70,6 +70,18 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertIn("群聊", out)
         self.assertNotIn("正在思考", out)
 
+    def test_status_snapshot_changes_when_typing_changes_without_signal_bump(self):
+        before_uid = ct.chat_update_id(self.tmp)
+        before = ct.status_snapshot(ct.chat_status(self.tmp))
+
+        (self.collab / "chat_typing.json").write_text(json.dumps({
+            "agents": {"Claude": {"status": "thinking", "since": now_str(), "message_id": "m1"}}
+        }))
+
+        self.assertEqual(ct.chat_update_id(self.tmp), before_uid)
+        after = ct.status_snapshot(ct.chat_status(self.tmp))
+        self.assertNotEqual(after, before)
+
     def test_interactive_line_mode_shows_responder_health(self):
         (self.collab / ".chatrespond_Claude.pid").write_text(str(os.getpid()))
 

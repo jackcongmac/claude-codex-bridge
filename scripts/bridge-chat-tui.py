@@ -45,12 +45,23 @@ def chat_update_id(project):
     return sig.get("update_id")
 
 
-def render_chat(project, self_name, draft=""):
+def chat_status(project):
+    return _load_chatweb().chat_status(project)
+
+
+def status_snapshot(status):
+    typing = tuple(status.get("typing", []) or [])
+    responders = tuple((r.get("name"), bool(r.get("alive")))
+                       for r in (status.get("responders", []) or []))
+    return typing, responders
+
+
+def render_chat(project, self_name, draft="", status=None):
     chatweb = _load_chatweb()
     p = collab_paths(find_project_root(project))
     msgs = chatweb.parse_chat(read_section(p["board"], "Chat"))
     lines = ["群聊 · %s  (Enter 发送, Esc 退出)" % self_name, ""]
-    status = chatweb.chat_status(project)
+    status = status if status is not None else chat_status(project)
     responders = status.get("responders", [])
     if responders:
         lines.append("应答器 " + " · ".join(
@@ -137,14 +148,18 @@ def run_tty(project, self_name, interval):
     old = termios.tcgetattr(fd)
     draft = []
     last = None
+    last_status = None
     try:
         tty.setcbreak(fd)
         while True:
             uid = chat_update_id(project)
-            if uid != last:
-                print("\033[2J\033[H" + render_chat(project, self_name, "".join(draft)),
+            status = chat_status(project)
+            status_key = status_snapshot(status)
+            if uid != last or status_key != last_status:
+                print("\033[2J\033[H" + render_chat(project, self_name, "".join(draft), status=status),
                       end="", flush=True)
                 last = uid
+                last_status = status_key
             ready, _, _ = select.select([sys.stdin], [], [], interval)
             if not ready:
                 continue
