@@ -203,7 +203,20 @@ scripts/init-collaboration.sh           # into the current directory
 scripts/init-collaboration.sh /path/to/project
 ```
 
-For a joined agent window, bring the liveness side online with one command:
+For a fresh or restarted agent window, run the activation autostart first:
+
+```bash
+scripts/board-wait.sh --self Codex --project . &
+scripts/bridge-autostart.sh --self Codex --peer Claude --project .
+```
+
+`board-wait` must be started by the agent/harness as the tracked background task;
+its exit is what wakes the agent. `bridge-autostart` then performs the proactive handshake:
+it joins the board, starts liveness, runs `bridge-handshake`, and reports
+GO/NO-GO. A NO-GO leaves a board invite for the peer and prints the exact fix, but it
+is non-blocking for work that does not require a peer handoff.
+
+For a manual fallback, bring only the liveness side online with:
 
 ```bash
 scripts/bridge-live.sh --self Codex --project .

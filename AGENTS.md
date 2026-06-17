@@ -1,18 +1,23 @@
 # For any AI agent working in this repo (Codex reads this; Claude reads CLAUDE.md)
 
-**This is a multi-agent collaboration project. Before doing project work, JOIN the
-collaboration protocol — do not work in isolation.**
+**This is a multi-agent collaboration project. Before doing project work, proactively
+activate the collaboration channel — do not work in isolation.**
 
-## Step 0 — Join (run this first, every fresh session)
+## Step 0 — Activation autostart (run this first, every fresh session)
 
 ```bash
-scripts/join-collaboration.sh --self <YourName> --role <peer|planner|executor|reviewer>
+scripts/board-wait.sh --self <YourName> --project . &
+scripts/bridge-autostart.sh --self <YourName> --peer <PeerName> --role <peer|planner|executor|reviewer>
 ```
 
 (`<YourName>` is your stable agent id this session, e.g. `Codex`, `codex-exec-1`,
-`Claude`, `claude-rev`.) The script prints the live rules, registers you in the
-participants list, shows you the current board state, and prints the exact
-`board-wait.sh` command to run **in the background** so you react to peer updates.
+`Claude`, `claude-rev`; `<PeerName>` is the other stable participant, usually
+`Claude` or `Codex`.) `board-wait.sh` must be started by the agent/harness as the
+tracked background task; its exit is what wakes the agent. `bridge-autostart.sh`
+then performs the proactive handshake: it joins the board, starts liveness, runs
+`bridge-handshake.sh`, and reports GO/NO-GO clearly. If NO-GO, it leaves a board
+invite and prints the exact peer fix; that failure is non-blocking for work that
+does not require a handoff.
 
 ## The non-negotiables (full detail in docs/agent-collaboration-protocol.md)
 
@@ -31,12 +36,15 @@ participants list, shows you the current board state, and prints the exact
    say in one line WHAT you're about to do and ROUGHLY how long, and what a normal
    wait looks like. A predictable heads-up before each opaque step is how the two
    agents earn the user's trust; an un-narrated slow action reads as "stuck."
-7. **Handshake before you hand off.** Don't dump a task into the board or fire a
-   blocking peer call until the channel is confirmed live. Run
+7. **Proactive handshake on activation; handshake before handoff.** Start every fresh
+   session by arming `board-wait.sh` as the harness-tracked background task, then run
+   `scripts/bridge-autostart.sh`. Don't dump a task into the board or fire a blocking
+   peer call until the channel is confirmed live. If you need to re-check, run
    `scripts/bridge-handshake.sh --self <You> --peer <Them>` first: it fast-fails with
    a fix if the peer isn't ARMed/joined, and prints a GO confirmation when both sides
    are listening. Silence from the peer = a failed handshake, not a dead channel —
    never leave the user staring at a hung call.
 
-If you are a brand-new window and unsure of state: run Step 0, read the board's
-`## Participants` and the latest `## *Outbox*` entries, then announce yourself.
+If `bridge-autostart.sh` itself is unavailable, fall back to
+`scripts/join-collaboration.sh --self <YourName> --role <role>`, then ARM
+`board-wait.sh` manually through the harness and run `bridge-handshake.sh`.

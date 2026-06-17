@@ -111,6 +111,23 @@ never lost) and starts the next session fresh.
 
 ## Using the bridge once set up
 
+### Activation autostart
+
+In a project with `.collab/`, the first action in every fresh/restarted agent session
+is the proactive handshake:
+
+```bash
+scripts/board-wait.sh --self <You> --project <root> &
+scripts/bridge-autostart.sh --self <You> --peer <Them> --project <root>
+```
+
+`board-wait.sh` must be started by the agent/harness as the tracked background task;
+its exit is what wakes the agent. `bridge-autostart.sh` then joins the board, starts
+liveness, runs `bridge-handshake.sh`, and reports GO/NO-GO. A NO-GO leaves a board
+invite for the peer and prints the exact fix, but it is non-blocking for work that
+does not require a peer handoff. Keep the existing rule: one-off MCP calls spawn a
+temporary peer and do not require this persistent-board handshake.
+
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,
 reads the board, can read/edit files — no shell).
 
