@@ -62,6 +62,14 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Claude 正在思考", r.stdout)
 
+    def test_render_chat_ignores_corrupt_typing_state(self):
+        (self.collab / "chat_typing.json").write_text("{not json")
+
+        out = ct.render_chat(self.tmp, "Jack")
+
+        self.assertIn("群聊", out)
+        self.assertNotIn("正在思考", out)
+
     def test_interactive_line_mode_shows_responder_health(self):
         (self.collab / ".chatrespond_Claude.pid").write_text(str(os.getpid()))
 

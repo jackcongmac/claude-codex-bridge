@@ -160,6 +160,14 @@ class ServerRoundTripTests(unittest.TestCase):
 
         self.assertEqual(status["typing"], ["Claude"])
 
+    def test_status_ignores_corrupt_typing_state(self):
+        pathlib.Path(self.tmp, ".collab", "chat_typing.json").write_text("{not json")
+
+        status = json.loads(self._get("/status"))
+
+        self.assertEqual(status["typing"], [])
+        self.assertEqual([r["name"] for r in status["responders"]], ["Claude", "Codex"])
+
     def test_status_reports_responder_health(self):
         pathlib.Path(self.tmp, ".collab", ".chatrespond_Claude.pid").write_text(str(os.getpid()))
 

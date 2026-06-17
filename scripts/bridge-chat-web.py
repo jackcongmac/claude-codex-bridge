@@ -162,7 +162,12 @@ def _typing_active(info, now=None):
 
 def chat_status(project, now=None):
     p = collab_paths(find_project_root(project))
-    state = read_json(p["chat_typing"], default={"agents": {}}) or {"agents": {}}
+    try:
+        state = read_json(p["chat_typing"], default={"agents": {}}) or {"agents": {}}
+    except RuntimeError:
+        state = {"agents": {}}
+    if not isinstance(state, dict):
+        state = {"agents": {}}
     typing = sorted(name for name, info in (state.get("agents", {}) or {}).items()
                     if _typing_active(info, now=now))
     responders = [{"name": name, "alive": responder_owner_alive(project, name)}
