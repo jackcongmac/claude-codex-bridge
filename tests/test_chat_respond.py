@@ -98,6 +98,20 @@ class RespondOnceTests(unittest.TestCase):
 
         self.assertNotIn("duplicate", self._chat_text())
 
+    def test_same_second_duplicate_prompt_is_not_collapsed_by_delivery_id(self):
+        self.collab.joinpath("collaboration.md").write_text(
+            "# Board\n\n## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude repeat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude repeat\n")
+
+        self.assertEqual(self._run("Claude", reply="PASS"), "passed")
+        self.assertEqual(self._run("Claude", reply="PASS"), "passed")
+
+        delivery = json.loads((self.collab / "chat_delivery.json").read_text())
+        handled = delivery["agents"]["Claude"]["handled"]
+        self.assertEqual(len(handled), 2)
+        self.assertEqual(sorted(m.get("duplicate") for m in delivery["messages"].values()), [0, 1])
+
     def test_empty_chat_is_noop(self):
         (self.collab / "collaboration.md").write_text("# Board\n")
         self.assertEqual(self._run("Claude"), "empty")

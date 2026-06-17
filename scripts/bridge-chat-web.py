@@ -58,6 +58,16 @@ def parse_chat(section):
         speaker, text = (sm.group(1).strip(), sm.group(2).strip()) if sm else ("?", body)
         msgs.append({"ts": m.group(1).strip(), "speaker": speaker, "text": text})
     msgs.reverse()   # board stores newest-first
+    counts = {}
+    for msg in msgs:
+        key = (msg["ts"], msg["speaker"], msg["text"])
+        counts[key] = counts.get(key, 0) + 1
+    seen = {}
+    for msg in msgs:
+        key = (msg["ts"], msg["speaker"], msg["text"])
+        if counts[key] > 1:
+            msg["_dup"] = seen.get(key, 0)
+            seen[key] = msg["_dup"] + 1
     return msgs
 
 

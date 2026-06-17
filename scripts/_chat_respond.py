@@ -66,7 +66,10 @@ def _same_msg(a, b):
 
 
 def _message_id(msg):
-    raw = json.dumps([msg.get(k, "") for k in _KEY], ensure_ascii=False, separators=(",", ":"))
+    parts = [msg.get(k, "") for k in _KEY]
+    if "_dup" in msg:
+        parts.append(msg.get("_dup"))
+    raw = json.dumps(parts, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -99,6 +102,8 @@ def _mark_delivery(project, self_name, msg, status):
             "text": msg.get("text", ""),
             "targets": sorted(_targets(msg)),
         }
+        if "_dup" in msg:
+            delivery["messages"][mid]["duplicate"] = msg.get("_dup")
         agent = delivery.setdefault("agents", {}).setdefault(self_name, {"handled": {}})
         agent.setdefault("handled", {})[mid] = {"status": status, "at": now_str()}
         atomic_write_json(_delivery_path(project), delivery)

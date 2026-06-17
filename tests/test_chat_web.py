@@ -44,6 +44,15 @@ class ParseChatTests(unittest.TestCase):
         self.assertEqual(len(msgs), 1)
         self.assertIn("### 2026-06-16 note", msgs[0]["text"])
 
+    def test_duplicate_messages_get_stable_ordinals(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude repeat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude repeat\n")
+        msgs = cw.parse_chat(section)
+
+        self.assertEqual([m.get("_dup") for m in msgs], [0, 1])
+
 
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
