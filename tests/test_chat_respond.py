@@ -9,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import _chat_respond as cr  # noqa: E402
+from bridge_common import read_section  # noqa: E402
 
 
 class RespondOnceTests(unittest.TestCase):
@@ -154,6 +155,15 @@ class RespondOnceTests(unittest.TestCase):
         self.assertIn("live reply", board)
         self.assertGreater(board.index("live reply"), board.index("## Chat\n"))  # under live Chat
         self.assertLess(board.index("old archived stuff"), board.index("## Chat\n"))  # archive intact
+
+    def test_reply_escapes_board_section_header_lines(self):
+        self._set_chat([("Jack", "@Claude can this break the board?")])
+
+        self.assertEqual(self._run("Claude", reply="sure\n## Chat Archive\nstill reply"),
+                         "responded")
+        chat = read_section(self.collab / "collaboration.md", "Chat")
+        self.assertIn("\\## Chat Archive", chat)
+        self.assertIn("still reply", chat)
 
     def test_resync_answers_missed_older_prompt_when_latest_targets_someone_else(self):
         # Claude was offline while two human prompts landed. On restart, latest is

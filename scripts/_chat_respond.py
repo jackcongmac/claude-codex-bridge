@@ -36,6 +36,7 @@ _spec = importlib.util.spec_from_file_location(
 _cw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_cw)
 parse_chat, mentions = _cw.parse_chat, _cw.mentions
+format_chat_message = _cw.format_chat_message
 
 AGENTS = {"Claude", "Codex"}
 
@@ -291,7 +292,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         # answer to the original prompt is still valid, so post it (replies may interleave).
         return not (newest.get("speaker") != self_name and self_name in _targets(newest))
 
-    st = _board_post(project, self_name, "**%s:** %s" % (self_name, reply),
+    st = _board_post(project, self_name, format_chat_message(self_name, reply),
                      section="Chat", guard=_guard)
     if st == "superseded":
         return "superseded"

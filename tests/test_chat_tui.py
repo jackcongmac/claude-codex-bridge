@@ -12,7 +12,7 @@ CHAT = SCRIPTS / "bridge-chat.sh"
 
 if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
-from bridge_common import now_str  # noqa: E402
+from bridge_common import now_str, read_section  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location("chattui", SCRIPTS / "bridge-chat-tui.py")
 ct = importlib.util.module_from_spec(_spec)
@@ -60,6 +60,13 @@ class BridgeChatTuiTests(unittest.TestCase):
 
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Claude 正在思考", r.stdout)
+
+    def test_post_chat_message_escapes_board_section_header_lines(self):
+        st = ct.post_chat_message(self.tmp, "Jack", "hello\n## Claude Outbox\nstill chat")
+
+        self.assertEqual(st, "ok")
+        chat = read_section(self.collab / "collaboration.md", "Chat")
+        self.assertIn("\\## Claude Outbox", chat)
 
 
 class ChatTuiLoaderTests(unittest.TestCase):

@@ -31,6 +31,16 @@ from _post import post as _board_post  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
+_BOARD_SECTION_LINE = re.compile(r'(?m)^(##)(?=\s|$)')
+
+
+def sanitize_chat_text(text):
+    """Escape board section headers inside a chat body before writing Markdown."""
+    return _BOARD_SECTION_LINE.sub(r'\\##', text or "")
+
+
+def format_chat_message(speaker, text):
+    return "**%s:** %s" % (speaker, sanitize_chat_text(text))
 
 
 def parse_chat(section):
@@ -247,7 +257,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send(200, json.dumps({"ok": False, "error": "empty"}))
                 return
             st = _board_post(self.server.project, self.server.self_name,
-                             "**%s:** %s" % (self.server.self_name, text), section="Chat")
+                             format_chat_message(self.server.self_name, text), section="Chat")
             ok = (st == "ok")
             self._send(200 if ok else 503,
                        json.dumps({"ok": ok, "error": None if ok else st}))

@@ -34,7 +34,8 @@ def _load_chatweb():
 
 
 def post_chat_message(project, self_name, text):
-    return _board_post(project, self_name, "**%s:** %s" % (self_name, text),
+    chatweb = _load_chatweb()
+    return _board_post(project, self_name, chatweb.format_chat_message(self_name, text),
                        section="Chat", summary="chat: %s: %s" % (self_name, text))
 
 
