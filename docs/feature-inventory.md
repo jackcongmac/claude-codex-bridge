@@ -106,6 +106,10 @@ keeps one Claude responder and one Codex responder in order and restarts a respo
 whose process exits. This is bounded to the web server lifetime; a full always-on
 watcher/responder service remains the next reliability step.
 
+**Web group chat startup.** `bridge-chat-web.py` defaults to `127.0.0.1:8765`, but
+falls back to an OS-assigned free local port if that default is busy. A user-specified
+`--port` remains strict.
+
 **Resource routing + dashboards.** Role presets (`apply-role-preset.py`),
 `bridge-status.py` (`--watch`). **Token control:** `compact-collaboration.sh` /
 `_compact.py` archive-rotate the board losslessly under lock.

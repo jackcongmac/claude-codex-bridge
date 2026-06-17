@@ -256,6 +256,13 @@ class SkillTriggerTests(unittest.TestCase):
         self.assertIn("群聊", text)
         self.assertIn("group chat", text.lower())
 
+    def test_skill_documents_web_chat_printed_url_and_port_fallback(self):
+        text = (ROOT / "skill" / "SKILL.md").read_text()
+
+        self.assertIn("prints the URL", text)
+        self.assertIn("127.0.0.1:8765", text)
+        self.assertIn("falls back to a free", text)
+
 
 if __name__ == "__main__":
     unittest.main()

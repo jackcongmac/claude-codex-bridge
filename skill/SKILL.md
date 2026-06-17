@@ -108,11 +108,12 @@ Optional browser view:
 
 1. If the user explicitly asks for a browser/window UI, run it in the background:
    `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
-   It serves a local window, opens the browser at `http://127.0.0.1:8765`, and
-   **auto-starts the Claude + Codex chat responders** so the room is live immediately
-   (each responder spawns its agent to reply when @-mentioned). Responders record
-   handled chat message ids in `<root>/.collab/chat_delivery.json`, so if one agent
-   was offline it can replay missed @ messages on restart with best-effort dedupe.
+   It serves a local window, opens the browser, and prints the URL to use. By default
+   it tries `http://127.0.0.1:8765`, but if that port is busy it falls back to a free
+   local port. It **auto-starts the Claude + Codex chat responders** so the room is
+   live immediately (each responder spawns its agent to reply when @-mentioned).
+   Responders record handled chat message ids in `<root>/.collab/chat_delivery.json`,
+   so if one agent was offline it can replay missed @ messages on restart with best-effort dedupe.
    Delivery is at-least-once: a crash after posting a reply but before recording
    handled state can re-answer that one message. While an agent is generating, the
    web room shows it as "正在思考" from `<root>/.collab/chat_typing.json`; stale typing

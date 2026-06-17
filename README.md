@@ -218,8 +218,9 @@ the Claude/Codex responders currently look online or offline.
 When the web group chat is open, it starts one responder for Claude and one for Codex
 and lightly supervises them: if a responder process exits while the room is still open,
 the server starts that responder again. The room's status area shows typing state plus
-responder online/offline health. This is scoped to the chat server lifetime; it is not
-a full always-on watcher service.
+responder online/offline health. By default it tries `127.0.0.1:8765`; if that port is
+busy, it falls back to a free local port and prints the URL to use. This is scoped to
+the chat server lifetime; it is not a full always-on watcher service.
 
 Drop both into a project (idempotent, never overwrites existing files):
 
