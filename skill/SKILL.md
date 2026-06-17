@@ -132,6 +132,20 @@ Optional browser view:
 It is one SESSION per window. Each close archives the full transcript (so past chats are
 never lost) and starts the next session fresh.
 
+Long-running responder supervision:
+
+- If the user wants the group chat responders to stay alive without keeping a
+  terminal TUI/browser room open, run:
+  `"$SCRIPTS/bridge-chat-supervise.py" --project "<root>"`
+- This starts one Claude responder and one Codex responder, restarts either one if
+  it exits, writes heartbeat/state to `<root>/.collab/chat_supervisor.json`, backs
+  off instead of hot-looping repeated crashes, and posts `## Liveness` alerts for
+  stale/down responders. It stops both responder process groups on Ctrl-C/SIGTERM.
+  It is not a human-facing chat UI; pair it with `bridge-chat.sh --interactive`,
+  `bridge-chat.sh --watch`, or `bridge-chat-web.py` to view/post messages.
+- Honest boundary: this supervisor does not restart itself. If it dies, the stale
+  heartbeat is how humans/agents detect that and restart it.
+
 ## Using the bridge once set up
 
 ### Activation autostart

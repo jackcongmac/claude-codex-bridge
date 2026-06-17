@@ -103,8 +103,13 @@ line input and `/exit`.
 
 **Group chat responder supervision.** While `bridge-chat-web.py` is serving a room, it
 keeps one Claude responder and one Codex responder in order and restarts a responder
-whose process exits. This is bounded to the web server lifetime; a full always-on
-watcher/responder service remains the next reliability step.
+whose process exits. For a UI-independent loop, `bridge-chat-supervise.py` starts the
+same two responders, restarts either one if it exits, and stops both responder process
+groups on Ctrl-C/SIGTERM. The supervisor writes `.collab/chat_supervisor.json`
+heartbeats without bumping the board signal, uses exponential backoff for repeated
+crashes, and posts `## Liveness` alerts only for meaningful stale/down or restart-limit
+conditions. It does not restart itself; a stale supervisor heartbeat is the detection
+surface for humans/agents to restart it.
 
 **Web group chat startup.** `bridge-chat-web.py` defaults to `127.0.0.1:8765`, but
 falls back to an OS-assigned free local port if that default is busy. A user-specified

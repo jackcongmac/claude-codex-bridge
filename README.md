@@ -222,6 +222,21 @@ responder online/offline health. By default it tries `127.0.0.1:8765`; if that p
 busy, it falls back to a free local port and prints the URL to use. This is scoped to
 the chat server lifetime; it is not a full always-on watcher service.
 
+For an always-on group-chat responder loop without opening a UI, run:
+
+```bash
+scripts/bridge-chat-supervise.py --project .
+```
+
+It starts one Claude responder and one Codex responder, restarts either one if it
+exits, writes a heartbeat/state file at `.collab/chat_supervisor.json`, backs off
+instead of hot-looping on repeated crashes, and posts a `## Liveness` alert when a
+responder stays down or hits the restart limit. It stops both responder process
+groups on Ctrl-C/SIGTERM. This is just the responder supervisor; use
+`bridge-chat.sh --interactive` or `bridge-chat-web.py` as the human-facing chat
+surface. The supervisor does not supervise itself: if it dies, the stale heartbeat
+is how humans/agents notice and restart it.
+
 Drop both into a project (idempotent, never overwrites existing files):
 
 ```bash
