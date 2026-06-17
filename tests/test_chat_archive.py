@@ -156,6 +156,28 @@ class ResponderLaunchTests(unittest.TestCase):
         self.assertEqual(len(spawned), 1)
         self.assertEqual(spawned[0][spawned[0].index("--self") + 1], "Claude")
 
+    def test_refresh_responders_does_not_churn_on_duplicate_singleton_exit(self):
+        class H:
+            def __init__(self, name, code=None):
+                self.name = name
+                self.code = code
+
+            def poll(self):
+                return self.code
+
+        duplicate = H("duplicate", code=0)
+        live = H("live")
+        spawned = []
+
+        handles = cw.refresh_responders(
+            [duplicate, live], "/proj", scripts_dir="/s",
+            spawn=lambda cmd: spawned.append(cmd) or H("new"),
+            owner_alive=lambda project, who: who == "Claude")
+
+        self.assertIs(handles[0], duplicate)
+        self.assertIs(handles[1], live)
+        self.assertEqual(spawned, [])
+
     def test_shutdown_joins_supervisor_before_stopping_refreshed_handles(self):
         class Event:
             def __init__(self):

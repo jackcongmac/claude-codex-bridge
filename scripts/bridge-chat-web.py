@@ -283,7 +283,37 @@ def start_responders(project, scripts_dir=None, spawn=None):
     return [spawn(cmd) for cmd in responder_cmds(scripts_dir, project)]
 
 
-def refresh_responders(handles, project, scripts_dir=None, spawn=None):
+def _safe_responder_name(name):
+    return re.sub(r'[^A-Za-z0-9_.-]', '_', name)
+
+
+def responder_owner_alive(project, self_name):
+    pidfile = os.path.join(collab_paths(find_project_root(project))["dir"],
+                           ".chatrespond_%s.pid" % _safe_responder_name(self_name))
+    try:
+        with open(pidfile) as f:
+            pid = int((f.read() or "").strip())
+    except Exception:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _responder_handle_alive(handle, project, self_name, owner_alive=None):
+    if handle is None:
+        return False
+    code = getattr(handle, "poll", lambda: None)()
+    if code is None:
+        return True
+    if code == 0:
+        return (owner_alive or responder_owner_alive)(project, self_name)
+    return False
+
+
+def refresh_responders(handles, project, scripts_dir=None, spawn=None, owner_alive=None):
     """Replace any responder process that has exited, preserving Claude/Codex order."""
     scripts_dir = scripts_dir or os.path.dirname(os.path.abspath(__file__))
     spawn = spawn or (lambda cmd: subprocess.Popen(
@@ -292,7 +322,8 @@ def refresh_responders(handles, project, scripts_dir=None, spawn=None):
     refreshed = list(handles or [])
     for i, cmd in enumerate(cmds):
         h = refreshed[i] if i < len(refreshed) else None
-        alive = h is not None and getattr(h, "poll", lambda: None)() is None
+        self_name = cmd[cmd.index("--self") + 1]
+        alive = _responder_handle_alive(h, project, self_name, owner_alive=owner_alive)
         if not alive:
             nh = spawn(cmd)
             if i < len(refreshed):
