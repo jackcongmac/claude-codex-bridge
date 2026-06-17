@@ -84,20 +84,33 @@ def _typing_path(project):
     return collab_paths(project)["chat_typing"]
 
 
+def _normalize_delivery(delivery):
+    if not isinstance(delivery, dict):
+        delivery = {}
+
+    messages = delivery.get("messages", {})
+    delivery["messages"] = messages if isinstance(messages, dict) else {}
+
+    agents = delivery.get("agents", {})
+    normalized_agents = {}
+    if isinstance(agents, dict):
+        for name, agent in agents.items():
+            if not isinstance(agent, dict):
+                continue
+            handled = agent.get("handled", {})
+            clean_agent = dict(agent)
+            clean_agent["handled"] = handled if isinstance(handled, dict) else {}
+            normalized_agents[name] = clean_agent
+    delivery["agents"] = normalized_agents
+    return delivery
+
+
 def _load_delivery(project):
     try:
         delivery = read_json(_delivery_path(project), default={"agents": {}, "messages": {}}) or {}
     except RuntimeError:
         delivery = {}
-    if not isinstance(delivery, dict):
-        delivery = {}
-    if not isinstance(delivery.get("agents", {}), dict):
-        delivery["agents"] = {}
-    if not isinstance(delivery.get("messages", {}), dict):
-        delivery["messages"] = {}
-    delivery.setdefault("agents", {})
-    delivery.setdefault("messages", {})
-    return delivery
+    return _normalize_delivery(delivery)
 
 
 def _handled_ids(delivery, self_name):

@@ -247,6 +247,28 @@ class RespondOnceTests(unittest.TestCase):
         self.assertIsInstance(delivery.get("agents"), dict)
         self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
 
+    def test_malformed_delivery_agent_record_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude repair agent record")])
+        delivery_path = self.collab / "chat_delivery.json"
+        delivery_path.write_text(json.dumps({"agents": {"Claude": ["bad"]}, "messages": {}}))
+
+        self.assertEqual(self._run("Claude", reply="agent record recovered"), "responded")
+
+        self.assertIn("**Claude:** agent record recovered", self._chat_text())
+        delivery = json.loads(delivery_path.read_text())
+        self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
+
+    def test_malformed_delivery_handled_record_does_not_block_reply(self):
+        self._set_chat([("Jack", "@Claude repair handled record")])
+        delivery_path = self.collab / "chat_delivery.json"
+        delivery_path.write_text(json.dumps({"agents": {"Claude": {"handled": ["bad"]}}, "messages": {}}))
+
+        self.assertEqual(self._run("Claude", reply="handled record recovered"), "responded")
+
+        self.assertIn("**Claude:** handled record recovered", self._chat_text())
+        delivery = json.loads(delivery_path.read_text())
+        self.assertEqual(len(delivery["agents"]["Claude"]["handled"]), 1)
+
     def test_resync_continues_to_later_unhandled_group_prompt_after_missed_reply(self):
         self._set_chat([("Jack", "@Claude first"), ("Jack", "team standup")])
 
