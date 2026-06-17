@@ -67,7 +67,7 @@ def post(project, self_name, message, section=None, summary=None, wait=10.0, gua
             return "signal_failed"
         return "ok"
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "post-%s" % self_name)
 
 
 def cmd_post(args):

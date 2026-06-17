@@ -146,7 +146,7 @@ def main():
         at.log_event(project, "task_claimed", run_id=agent_id, task=task_id,
                      epoch=epoch, reclaimed=reclaimed, type=task.get("type"))
     finally:
-        at.release_lock(lock_p)
+        at.release_lock(lock_p, "claim-%s" % agent_id)
 
     # ---- RUN the model (NO lock held) ----
     role = a.role or task_snapshot.get("needs_role", "")
@@ -226,7 +226,7 @@ def main():
         at.log_event(project, "queue_commit_error", run_id=agent_id, task=task_id, detail=str(e)[:200])
         sys.exit(30)
     finally:
-        at.release_lock(lock_p)
+        at.release_lock(lock_p, "commit-%s" % agent_id)
 
     at.log_event(project, "task_committed", run_id=agent_id, task=task_id, status=new_status,
                  enqueued=added, cost=cost, turns_used=ctrl.get("turns_used"))
@@ -253,7 +253,7 @@ def _fail_task(at, project, queue_p, sig_p, lock_p, agent_id, task_id, seen_epoc
                                              "updated_by": agent_id, "changed_section": "queue",
                                              "summary": "task %s failed: %s" % (task_id, reason)})
         finally:
-            at.release_lock(lock_p)
+            at.release_lock(lock_p, "fail-%s" % agent_id)
     at.log_event(project, "task_failed", run_id=agent_id, task=task_id, reason=reason, detail=detail)
     sys.exit(20)
 

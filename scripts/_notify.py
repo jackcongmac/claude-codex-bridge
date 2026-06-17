@@ -57,7 +57,7 @@ def tick(project, self_name, present_window, stale_after):
                 fired.append((name, v))
         bc.atomic_write_json(seen_path, cur)      # commit (records bootstrap + recovery quietly)
     finally:
-        bc.release_lock(P["lock"])
+        bc.release_lock(P["lock"], "notify-%s" % self_name)
     for name, v in fired:                          # OS notify outside the lock
         try:
             bc.notify("liveness: %s went %s" % (name, v))

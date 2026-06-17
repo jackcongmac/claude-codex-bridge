@@ -124,7 +124,7 @@ def main():
                      before_bytes=size, after_bytes=len(new_board))
         print("archived %d entries -> %s (board %d -> %d bytes)" % (count, ar_p, size, len(new_board)))
     finally:
-        at.release_lock(lock_p)
+        at.release_lock(lock_p, "compact")
 
 
 if __name__ == "__main__":

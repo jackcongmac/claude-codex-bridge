@@ -174,7 +174,7 @@ def repair(project, issues, p, stale_after):
                             a["departed"] = False
                 atomic_write_json(p["participants"], reg)
             finally:
-                release_lock(p["lock"])
+                release_lock(p["lock"], "doctor")
     return remaining
 
 

@@ -164,24 +164,37 @@ def _pid_alive(pid):
 
 def acquire_lock(lock_path, run_id, ttl, wait=0):
     deadline = time.time() + wait
-    payload = json.dumps({"pid": os.getpid(), "host": socket.gethostname(),
-                          "run_id": run_id, "acquired_at": time.time()})
     while True:
         try:
+            payload = json.dumps({"pid": os.getpid(), "host": socket.gethostname(),
+                                  "run_id": run_id, "acquired_at": time.time()})
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             os.write(fd, payload.encode())
             os.close(fd)
             return True
         except FileExistsError:
-            # maybe stale?
+            # Maybe stale? Break it ATOMICALLY. The old read->unlink->create break let
+            # two waiters both judge the same lock stale, both unlink, then both create a
+            # fresh lock -> both believe they hold it (TOCTOU double-hold). Instead, CLAIM
+            # the break by renaming the stale lock to a unique name: os.rename of a given
+            # source succeeds for exactly one racer; the loser hits an OSError and just
+            # retries the loop, where it finds the winner's fresh (non-stale) lock.
             try:
                 with open(lock_path) as _lf:
                     info = json.load(_lf)
                 age = time.time() - float(info.get("acquired_at", 0))
                 holder = int(info.get("pid", -1))
                 if age > ttl and not _pid_alive(holder):
-                    os.unlink(lock_path)  # break stale lock
-                    continue
+                    breaking = "%s.breaking.%s" % (lock_path, run_id)
+                    try:
+                        os.rename(lock_path, breaking)
+                    except OSError:
+                        continue  # another racer won the break; retry
+                    try:
+                        os.unlink(breaking)
+                    except FileNotFoundError:
+                        pass
+                    continue  # next iteration creates a fresh lock atomically
             except Exception:
                 pass
             if time.time() >= deadline:
@@ -189,7 +202,19 @@ def acquire_lock(lock_path, run_id, ttl, wait=0):
             time.sleep(0.2)
 
 
-def release_lock(lock_path):
+def release_lock(lock_path, run_id=None):
+    # Owner-checked: only remove the lock if we still hold it (its run_id matches ours).
+    # This stops a late release from a former holder deleting a DIFFERENT holder's fresh
+    # lock. run_id=None keeps the legacy unconditional unlink for callers not yet updated.
+    if run_id is not None:
+        try:
+            with open(lock_path) as _lf:
+                if json.load(_lf).get("run_id") != run_id:
+                    return  # not ours (or already replaced) -> leave it alone
+        except FileNotFoundError:
+            return
+        except Exception:
+            return  # unreadable/corrupt -> can't confirm ownership, leave for stale-break
     try:
         os.unlink(lock_path)
     except FileNotFoundError:

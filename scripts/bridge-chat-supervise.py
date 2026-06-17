@@ -130,7 +130,7 @@ def emit_alert(project, tracker, message, notify=None):
         })
         tracker["alerts"].append(message)
     finally:
-        bc.release_lock(P["lock"])
+        bc.release_lock(P["lock"], "chat-supervisor-alert-%d" % os.getpid())
     try:
         (notify or bc.notify)("chat supervisor: %s" % message)
     except Exception:

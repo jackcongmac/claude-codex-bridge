@@ -54,13 +54,14 @@ def _with_lock(paths, fn, wait=3.0, ttl=5):
     was acquired (and fn ran), False if it could not be taken in `wait` seconds.
     fn communicates results via closure, not its return value."""
     lock = paths["handshake_lock"]
-    if not acquire_lock(lock, "handshake-%d" % os.getpid(), ttl=ttl, wait=wait):
+    rid = "handshake-%d" % os.getpid()
+    if not acquire_lock(lock, rid, ttl=ttl, wait=wait):
         return False
     try:
         fn()
         return True
     finally:
-        release_lock(lock)
+        release_lock(lock, rid)
 
 
 def _read(paths):

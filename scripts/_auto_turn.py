@@ -75,13 +75,13 @@ def halt(project, state_path, lock_path, run_id, reason, lock_held=False, **extr
         try:
             _write_failure_state(state_path, reason, extra); wrote = True
         finally:
-            release_lock(lock_path)
+            release_lock(lock_path, run_id)
     else:
         if acquire_lock(lock_path, run_id, ttl=0, wait=10):
             try:
                 _write_failure_state(state_path, reason, extra); wrote = True
             finally:
-                release_lock(lock_path)
+                release_lock(lock_path, run_id)
     log_event(project, "halted", run_id=run_id, reason=reason, wrote_state=wrote, **extra)
     notify("Auto-loop halted: %s (awaiting human)" % reason)
     sys.exit(20)
@@ -312,7 +312,7 @@ def main():
              lock_held=True, seen=seen, now=cur.get("update_id"))
     cur_state = read_json(state_p) or {}
     if cur_state.get("status") != "active" or cur_state.get("next_actor") != self_actor:
-        release_lock(lock_p)
+        release_lock(lock_p, run_id)
         log_event(project, "authority_changed", run_id=run_id); sys.exit(10)
     # Slice 3 coverage epoch guard: a covering turn must commit against the same
     # coverage it opened under (belt & suspenders atop the update_id CAS).
@@ -397,7 +397,7 @@ def main():
     except Exception as e:
         halt(project, state_p, lock_p, run_id, "commit_error", lock_held=True, detail=str(e)[:200])
     finally:
-        release_lock(lock_p)
+        release_lock(lock_p, run_id)
 
     log_event(project, "committed", run_id=run_id, actor=self_actor, update_id=new_uid,
               next_actor=cur_state["next_actor"], status=cur_state["status"],

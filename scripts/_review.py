@@ -67,7 +67,7 @@ def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False
         atomic_write_json(p["reviews"], led)
         return "ok"
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "review-%s" % reviewer)
 
 
 def has_approval(project, sha, exclude_actor):

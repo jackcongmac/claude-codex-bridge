@@ -147,7 +147,7 @@ def archive_and_clear_chat(project):
             "summary": "chat session archived (%d messages) -> %s" % (len(msgs), path)})
         return path
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "chat-archive-%d" % os.getpid())
 
 
 def _typing_active(info, now=None):

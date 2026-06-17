@@ -201,7 +201,8 @@ self_name = os.environ["_SELF"]; peer = os.environ["_PEER"]; msg = os.environ["_
 # Take the SAME collaboration.lock every real board/signal write takes (see
 # _presence.py / _auto_turn.py) — append + bump is a read-modify-write that would
 # otherwise clobber a concurrent presence broadcast or auto-turn commit.
-if not acquire_lock(p["lock"], "handshake-handoff-%d" % os.getpid(), ttl=30, wait=10):
+_rid = "handshake-handoff-%d" % os.getpid()
+if not acquire_lock(p["lock"], _rid, ttl=30, wait=10):
     sys.exit(1)
 try:
     section = "%s Outbox" % self_name
@@ -216,7 +217,7 @@ try:
         "summary": ("handshake handoff to %s: %s" % (peer, msg))[:200],
     })
 finally:
-    release_lock(p["lock"])
+    release_lock(p["lock"], _rid)
 PY
     then
       printf '   \033[1;32m↪\033[0m 已把第一条活儿发到板上并 bump signal —— %s 的 board-wait 会带着它醒来。\n' "$PEER"

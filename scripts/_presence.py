@@ -66,7 +66,7 @@ def heartbeat(project, self_name):
             mine["departed"] = False
         bc.atomic_write_json(parts_p, reg)
     finally:
-        bc.release_lock(lock_p)
+        bc.release_lock(lock_p, "heartbeat-%s" % self_name)
 
 
 def register(project, self_name, role="peer", wait=10.0):
@@ -94,7 +94,7 @@ def register(project, self_name, role="peer", wait=10.0):
         bc.atomic_write_json(parts_p, reg)
         return True
     finally:
-        bc.release_lock(lock_p)
+        bc.release_lock(lock_p, "register-%s" % self_name)
 
 
 def tick(project, self_name, stale_after):
@@ -142,7 +142,7 @@ def tick(project, self_name, stale_after):
             bc.log_event(project, "participant_departed", run_id="presence",
                          detector=self_name, departed=broadcast)
     finally:
-        bc.release_lock(lock_p)
+        bc.release_lock(lock_p, "presence-%s" % self_name)
     return broadcast
 
 

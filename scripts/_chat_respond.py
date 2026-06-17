@@ -142,7 +142,7 @@ def _mark_delivery(project, self_name, msg, status):
         agent.setdefault("handled", {})[mid] = {"status": status, "at": now_str()}
         atomic_write_json(_delivery_path(project), delivery)
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "chat-delivery-%d" % os.getpid())
 
 
 def _load_typing(project):
@@ -170,7 +170,7 @@ def _set_typing(project, self_name, msg):
         }
         atomic_write_json(_typing_path(project), state)
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "chat-typing-%d" % os.getpid())
 
 
 def _clear_typing(project, self_name):
@@ -182,7 +182,7 @@ def _clear_typing(project, self_name):
         state.setdefault("agents", {}).pop(self_name, None)
         atomic_write_json(_typing_path(project), state)
     finally:
-        release_lock(p["lock"])
+        release_lock(p["lock"], "chat-typing-%d" % os.getpid())
 
 
 def _targets(msg):

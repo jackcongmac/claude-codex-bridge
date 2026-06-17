@@ -27,11 +27,53 @@ for a in "$@"; do
 done
 WHO="${WHO:-${BRIDGE_AGENT:-unknown}}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(git rev-parse --show-toplevel)"
+REPO="${BRIDGE_PUSH_REPO:-$(git rev-parse --show-toplevel)}"
 LOCK="$REPO/.bridge_push.lock"
-BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+BRANCH="${BRIDGE_PUSH_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 TTL="${BRIDGE_PUSH_TTL:-180}"          # seconds before a held lock is considered stale
 WAIT_MAX="${BRIDGE_PUSH_WAIT:-120}"    # seconds to wait for a peer's push before giving up
+
+now() { date +%s; }
+jget() { _L="$LOCK" _K="$1" python3 -c "import json,os;print(json.load(open(os.environ['_L']))[os.environ['_K']])" 2>/dev/null || echo "$2"; }
+
+# release: owner-checked — only remove the lock if WE still hold it (its pid is ours),
+# so a late release can't delete a DIFFERENT pusher's freshly-acquired lock.
+release() {
+  if [ "$(jget pid -1)" = "$$" ]; then rm -f "$LOCK"; fi
+}
+
+acquire() {
+  local waited=0
+  while true; do
+    # atomic create-if-absent
+    if ( set -o noclobber
+         printf '{"who":"%s","pid":%s,"host":"%s","since":%s}\n' \
+                "$WHO" "$$" "$(hostname)" "$(now)" > "$LOCK" ) 2>/dev/null; then
+      return 0
+    fi
+    local since who pid; since="$(jget since 0)"; who="$(jget who '?')"; pid="$(jget pid -1)"
+    if [ "$(( $(now) - since ))" -gt "$TTL" ]; then
+      # ATOMIC stale break: CLAIM the break by renaming the stale lock to a unique
+      # name. `mv` of a given source succeeds for exactly one racer; the loser finds
+      # the source gone and just retries (then sees the winner's fresh lock). This
+      # stops two pushers both breaking the same stale lock and both proceeding.
+      echo "[!] breaking stale push lock (held by $who for >${TTL}s)"
+      if mv "$LOCK" "$LOCK.breaking.$$" 2>/dev/null; then
+        rm -f "$LOCK.breaking.$$"
+      fi
+      continue
+    fi
+    if [ "$waited" -ge "$WAIT_MAX" ]; then
+      echo "[x] push lock held by $who (pid $pid) — gave up after ${waited}s." >&2
+      echo "    If you're sure it's dead: rm $LOCK" >&2
+      return 1
+    fi
+    echo "[..] $who is pushing; waiting (${waited}s)…"; sleep 3; waited=$(( waited + 3 ))
+  done
+}
+
+# Test seam: source the script to load the lock helpers without running the push.
+if [ "${BRIDGE_PUSH_SOURCE_ONLY:-}" = "1" ]; then return 0 2>/dev/null || exit 0; fi
 
 # --- review gate: refuse to push a commit no PEER has approved ----------------
 # Only when this repo runs a collaboration board; a plain repo is never gated. The
@@ -66,33 +108,6 @@ if board_present; then
     exit 4
   fi
 fi
-
-now() { date +%s; }
-jget() { _L="$LOCK" _K="$1" python3 -c "import json,os;print(json.load(open(os.environ['_L']))[os.environ['_K']])" 2>/dev/null || echo "$2"; }
-
-release() { rm -f "$LOCK"; }
-
-acquire() {
-  local waited=0
-  while true; do
-    # atomic create-if-absent
-    if ( set -o noclobber
-         printf '{"who":"%s","pid":%s,"host":"%s","since":%s}\n' \
-                "$WHO" "$$" "$(hostname)" "$(now)" > "$LOCK" ) 2>/dev/null; then
-      return 0
-    fi
-    local since who pid; since="$(jget since 0)"; who="$(jget who '?')"; pid="$(jget pid -1)"
-    if [ "$(( $(now) - since ))" -gt "$TTL" ]; then
-      echo "[!] breaking stale push lock (held by $who for >${TTL}s)"; rm -f "$LOCK"; continue
-    fi
-    if [ "$waited" -ge "$WAIT_MAX" ]; then
-      echo "[x] push lock held by $who (pid $pid) — gave up after ${waited}s." >&2
-      echo "    If you're sure it's dead: rm $LOCK" >&2
-      return 1
-    fi
-    echo "[..] $who is pushing; waiting (${waited}s)…"; sleep 3; waited=$(( waited + 3 ))
-  done
-}
 
 acquire || exit 1
 trap release EXIT
