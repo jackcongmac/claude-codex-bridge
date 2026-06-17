@@ -171,6 +171,15 @@ def main():
              cost=state.get("cost_so_far_usd"), max_cost=mc)
 
     # ---- advance high-water BEFORE running the model (dedupe replayed fs events) ----
+    # NOTE: this is SEQUENTIAL-REPLAY dedupe, NOT concurrency dedupe. It is only safe
+    # under the documented "one watcher per side" invariant: run_turn is called serially
+    # in the watch loop, so advancing hw here just stops a re-fired fs event from
+    # re-running the same uid. Two watchers on the same side would BOTH advance hw and
+    # double-run the model (and one would hit a CAS conflict at commit). The real
+    # serialization guarantee is the update_id CAS at commit time, not this hw write.
+    # Caveat (see docs/superpowers/specs/2026-06-17-half-commit-recovery-design.md): a
+    # crash AFTER the board append below but BEFORE the signal/state commit leaves a
+    # half-committed turn whose uid is already <= hw, so it is skipped on replay.
     atomic_write_json(hw_p, {"last_processed_update_id": uid})
     seen = uid
 
