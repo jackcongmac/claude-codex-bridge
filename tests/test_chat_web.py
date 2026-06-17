@@ -149,6 +149,23 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("\\## Claude Outbox", chat)
         self.assertEqual(msgs[-1]["text"], "hello\n\\## Claude Outbox\nstill chat")
 
+    def test_quit_reports_archive_failure_without_shutdown(self):
+        orig = cw.archive_and_clear_chat
+        cw.archive_and_clear_chat = lambda project: (_ for _ in ()).throw(RuntimeError("disk full"))
+        try:
+            req = urllib.request.Request(
+                self.base + "/quit", data=b"{}",
+                headers={"Content-Type": "application/json", "X-Token": self.httpd.token})
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req, timeout=5)
+            body = json.loads(cm.exception.read().decode())
+
+            self.assertEqual(cm.exception.code, 500)
+            self.assertEqual(body, {"ok": False, "error": "archive_failed"})
+            self.assertIn("<html", self._get("/").lower())
+        finally:
+            cw.archive_and_clear_chat = orig
+
     def test_messages_endpoint_ignores_chat_archive_lookalike_section(self):
         pathlib.Path(self.tmp, ".collab", "collaboration.md").write_text(
             "# Board\n\n## Chat Archive\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** old\n\n"

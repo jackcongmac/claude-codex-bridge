@@ -232,7 +232,8 @@ async function send(){const t=document.getElementById('msg');const v=t.value;if(
 document.getElementById('send').onclick=send;
 document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
 document.getElementById('close').onclick=async()=>{let p=null;
-  try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});p=(await r.json()).archived;}catch(e){}
+  try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});const j=await r.json();
+    if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('关闭失败,请重试');return;}
   document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">群聊已关闭。<span id=ar></span><br>可以关掉这个标签页。</p>';
   if(p)document.getElementById('ar').textContent=' 本次记录已存到:'+p;};
 load();setInterval(load,1500);
@@ -300,7 +301,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             try:
                 archived = archive_and_clear_chat(self.server.project)
             except Exception:
-                archived = None
+                self._send(500, json.dumps({"ok": False, "error": "archive_failed"}))
+                return
             self._send(200, json.dumps({"ok": True, "archived": archived}))
             threading.Thread(target=self.server.shutdown, daemon=True).start()
         else:
