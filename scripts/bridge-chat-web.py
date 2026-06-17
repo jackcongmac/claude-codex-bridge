@@ -169,8 +169,10 @@ def chat_status(project, now=None):
         state = {"agents": {}}
     if not isinstance(state, dict):
         state = {"agents": {}}
-    typing = sorted(name for name, info in (state.get("agents", {}) or {}).items()
-                    if _typing_active(info, now=now))
+    agents = state.get("agents", {}) or {}
+    if not isinstance(agents, dict):
+        agents = {}
+    typing = sorted(name for name, info in agents.items() if _typing_active(info, now=now))
     responders = [{"name": name, "alive": responder_owner_alive(project, name)}
                   for name in ("Claude", "Codex")]
     return {"typing": typing, "responders": responders}
