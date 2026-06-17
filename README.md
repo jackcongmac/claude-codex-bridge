@@ -269,15 +269,27 @@ process if needed, prints the current liveness report, and gives you the exact
 wake-on-exit; `--stay-armed` is an optional liveness/pong helper and is not the
 interactive pane's wake task.
 
+When `board-wait` wakes on the peer's Outbox, treat that Outbox as your Inbox:
+
+```bash
+scripts/bridge-inbox.sh pending --self Codex --project .
+scripts/bridge-inbox.sh ack --self Codex --project . --status CLAIM --note "what I will do"
+```
+
+The receipt is written to `Inbox Acks` plus `.collab/inbox_ack.json`, not back to
+Outbox, so a handoff becomes machine-checkable without creating a new task loop.
+
 The loop:
 
 1. Each agent reads `collaboration_signal.json`; re-reads `collaboration.md` only
    when `update_id` changed.
-2. Each posts status / findings to **its own outbox** via
+2. On `<Peer> Outbox`, the waking agent runs `bridge-inbox.sh pending` and records
+   `ACK`, `CLAIM`, `DECLINE`, or `DONE` with `bridge-inbox.sh ack`.
+3. Each posts status / findings to **its own outbox** via
    `scripts/bridge-post.sh --self <You> --message "…"` — one **locked** step that
    appends to the board AND bumps `collaboration_signal.json`. (Don't hand-edit the
    board and bump the signal separately — that lock-free pattern can lose updates.)
-3. Use the MCP bridge to **poke the other agent to take a turn**.
+4. Use the MCP bridge to **poke the other agent to take a turn**.
 
 > Transport (global, installed once) vs. coordination (per-project files you drop
 > in). The bridge gives you both halves; the board is what makes a review →

@@ -99,6 +99,8 @@ class BridgeStatusCliTests(unittest.TestCase):
                 "Last signal: #42 by Codex at 2026-06-09 10:11:12 PDT - Asked human to approve higher budget.",
                 result.stdout,
             )
+            self.assertIn("Inbox Claude: clear from Codex Outbox", result.stdout)
+            self.assertIn("Inbox Codex: clear from Claude Outbox", result.stdout)
             self.assertIn("Recent events:", result.stdout)
             self.assertNotIn("event 1", result.stdout)
             self.assertIn("  event 2", result.stdout)
@@ -133,6 +135,8 @@ class BridgeStatusCliTests(unittest.TestCase):
             self.assertIn("Cost: $0.00 / $5.00", result.stdout)
             self.assertIn("Last writer: none", result.stdout)
             self.assertIn("Last signal: unavailable", result.stdout)
+            self.assertIn("Inbox Claude: clear from Codex Outbox", result.stdout)
+            self.assertIn("Inbox Codex: clear from Claude Outbox", result.stdout)
             self.assertIn("Recent events: none", result.stdout)
             self.assertEqual(result.stderr, "")
 
@@ -167,6 +171,31 @@ class BridgeStatusCliTests(unittest.TestCase):
                 if path.is_file()
             }
             self.assertEqual(before_contents, after_contents)
+
+    def test_shows_pending_inbox_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            collab = project / ".collab"
+            collab.mkdir()
+            write_json(collab / "collaboration_state.json", {"status": "active"})
+            write_json(
+                collab / "collaboration_signal.json",
+                {"update_id": 3, "updated_by": "Claude", "summary": "task"},
+            )
+            (collab / "collaboration_auto.log").write_text("", encoding="utf-8")
+            (collab / "collaboration.md").write_text(
+                "# Board\n\n"
+                "## Claude Outbox\n\n"
+                "### 2026-06-17 10:00:00 PDT\n\n"
+                "Codex please respond.\n\n"
+                "## Codex Outbox\n\n",
+                encoding="utf-8",
+            )
+
+            result = self.run_status(project)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Inbox Codex: ACTION_REQUIRED 1 pending from Claude Outbox", result.stdout)
 
 
 if __name__ == "__main__":

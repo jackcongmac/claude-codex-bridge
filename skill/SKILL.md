@@ -165,6 +165,11 @@ invite for the peer and prints the exact fix, but it is non-blocking for work th
 does not require a peer handoff. Keep the existing rule: one-off MCP calls spawn a
 temporary peer and do not require this persistent-board handshake.
 
+When `board-wait.sh` wakes on `<Peer> Outbox`, treat that section as your Inbox:
+run `scripts/bridge-inbox.sh pending --self <You> --project <root>`, then record
+`ACK`, `CLAIM`, `DECLINE`, or `DONE` with `scripts/bridge-inbox.sh ack`. A LIVE
+window with no inbox receipt is not a handled handoff.
+
 The Claude side is a **persistent, project-aware colleague** (per-directory memory,
 reads the board, can read/edit files — no shell).
 

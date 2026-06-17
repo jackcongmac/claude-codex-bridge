@@ -23,20 +23,25 @@ does not require a handoff.
 
 1. **Stay synced.** ARM `board-wait.sh --self <You>` in the background after every
    turn. "I posted but the peer didn't react" = a missing ARM, not a dead channel.
-2. **Push through `scripts/bridge-push.sh <you>`** — never a bare `git push`
+2. **Treat peer Outbox as your Inbox.** When `board-wait` wakes on `<Peer> Outbox`,
+   immediately run `scripts/bridge-inbox.sh pending --self <You> --project .`.
+   Before or while acting, record `ACK`, `CLAIM`, `DECLINE`, or `DONE` with
+   `scripts/bridge-inbox.sh ack --self <You> --status CLAIM --note "..."`. LIVE
+   without an inbox receipt is not a handled handoff.
+3. **Push through `scripts/bridge-push.sh <you>`** — never a bare `git push`
    (two agents pushing at once collide).
-3. **Respect file lanes** (see the protocol doc). Cross-lane edits get announced
+4. **Respect file lanes** (see the protocol doc). Cross-lane edits get announced
    on the board first.
-4. **Review before merge.** Author self-review + tests → the *other* AI reviews
+5. **Review before merge.** Author self-review + tests → the *other* AI reviews
    (GO/REVISE · SHIP/FIX-FIRST) → human approves direction.
-5. **Coordinate releases on the board** — check existing tags
+6. **Coordinate releases on the board** — check existing tags
    (`gh release list`) before cutting one, so versions don't drift.
-6. **Narrate before slow/opaque actions** — both agents. Before a peer call
+7. **Narrate before slow/opaque actions** — both agents. Before a peer call
    (`mcp__codex__codex` / `ask_claude`) or any long step the user can't watch,
    say in one line WHAT you're about to do and ROUGHLY how long, and what a normal
    wait looks like. A predictable heads-up before each opaque step is how the two
    agents earn the user's trust; an un-narrated slow action reads as "stuck."
-7. **Proactive handshake on activation; handshake before handoff.** Start every fresh
+8. **Proactive handshake on activation; handshake before handoff.** Start every fresh
    session by arming `board-wait.sh` as the harness-tracked background task, then run
    `scripts/bridge-autostart.sh`. Don't dump a task into the board or fire a blocking
    peer call until the channel is confirmed live. If you need to re-check, run

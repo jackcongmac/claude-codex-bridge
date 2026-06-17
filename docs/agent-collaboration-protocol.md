@@ -92,12 +92,21 @@ scripts/board-wait.sh --self Claude --project . &     # Codex uses --self Codex
    appends to the board AND bumps the signal in one locked step), **ARM**:
    run `board-wait.sh --self <You>` in the background.
 2. On wake (the waiter exited):
-   - `CHANGED …` → read the named section, take your turn, post your reply with
-     `bridge-post.sh` (append + bump), then **re-arm** (go to 1).
+   - `CHANGED …` on `<Peer> Outbox` → run
+     `bridge-inbox.sh pending --self <You> --project <root>`, then record
+     `ACK`, `CLAIM`, `DECLINE`, or `DONE` with `bridge-inbox.sh ack` before or
+     while acting. Take your turn, post your reply with `bridge-post.sh`
+     (append + bump), then **re-arm** (go to 1).
+   - `CHANGED …` elsewhere → read the named section, take your turn if needed,
+     post your reply with `bridge-post.sh` (append + bump), then **re-arm**.
    - `TIMEOUT …` → nothing yet; just **re-arm**.
 3. Never assume silence = the peer is done. Silence = you weren't armed. If you
    stop collaborating, say so on the board (`status: done`) so the peer can stop
    arming too.
+
+`LIVE` means a window is joined and listening. It does not mean the latest handoff
+was accepted. The inbox receipt is the durable proof that the peer saw the task and
+either claimed it, declined it, or marked it done.
 
 **Why this is the whole point:** without arming, "two agents communicating" only
 works for headless watchers or a human relaying every message by hand. Arming is

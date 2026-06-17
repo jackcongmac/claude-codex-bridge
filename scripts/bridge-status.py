@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bridge_common as bc  # find_project_root + collab_paths (single source of truth)
+import bridge_inbox
 
 
 RECENT_EVENT_COUNT = 5
@@ -114,6 +115,21 @@ def format_signal(signal):
     return prefix
 
 
+def format_inbox(project, actor):
+    try:
+        info = bridge_inbox.status(str(project), actor)
+    except Exception as exc:
+        return f"Inbox {actor}: unavailable ({exc})"
+    pending = info["pending"]
+    if not pending:
+        return f"Inbox {actor}: clear from {info['section']}"
+    latest = pending[-1]
+    return (
+        f"Inbox {actor}: ACTION_REQUIRED {len(pending)} pending from {info['section']} "
+        f"(latest #{latest['index']} {latest['digest']})"
+    )
+
+
 def build_dashboard(project):
     # Resolve the project root (any cwd depth) and read from <root>/.collab/ via
     # the single source of truth, so we never report a stale legacy flat board.
@@ -156,6 +172,8 @@ def build_dashboard(project):
             f"Cost: {format_cost(state)}",
             f"Last writer: {format_value(state.get('last_writer'))}",
             f"Last signal: {format_signal(signal)}",
+            format_inbox(root, "Claude"),
+            format_inbox(root, "Codex"),
         ]
     )
 

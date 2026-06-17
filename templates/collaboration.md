@@ -113,6 +113,13 @@ OWNED BY Claude
 
 <!-- Claude appends review findings and action requests here. -->
 
+## Inbox Acks
+
+Shared machine-readable acknowledgement trail. When an agent wakes on the peer's
+Outbox, it must ACK/CLAIM/DECLINE/DONE with `bridge-inbox.sh ack` before or while
+acting. This section is for receipts only; new work still goes in the writer's
+own Outbox.
+
 ## Open Questions
 
 Shared — items needing the human's decision.

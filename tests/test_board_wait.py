@@ -89,8 +89,11 @@ class BoardWaitStayArmedTests(unittest.TestCase):
                         "--summary", "stay armed regression"],
                        capture_output=True, text=True, check=True)
 
-        output = self._read_until(waiter, "CHANGED update_id=")
+        output = self._read_until(waiter, "Inbox: ACTION_REQUIRED")
+        self.assertIn("CHANGED update_id=", output)
         self.assertIn("stay armed regression", output)
+        self.assertIn("Inbox: ACTION_REQUIRED", output)
+        self.assertIn("Claude Outbox", output)
         self.assertIsNone(waiter.poll(), "stay-armed board-wait must not exit after wake")
         self.assertEqual(pidfile.read_text().strip(), str(waiter.pid))
 

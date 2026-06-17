@@ -70,4 +70,7 @@ cat <<EOF
 
 ARM board-wait in the background after this turn:
   $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
+When it wakes on the peer Outbox, receipt the handoff:
+  $HERE/bridge-inbox.sh pending --self "$SELF" --project "$PROJECT"
+  $HERE/bridge-inbox.sh ack --self "$SELF" --project "$PROJECT" --status CLAIM --note "<what you will do>"
 EOF

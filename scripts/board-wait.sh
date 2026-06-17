@@ -85,6 +85,9 @@ while true; do
     SEC="$(field changed_section)"; SUM="$(field summary)"
     echo "CHANGED update_id=$UID_NOW by=$BY section=$SEC"
     echo "summary: $SUM"
+    if [ "$SEC" = "$BY Outbox" ]; then
+      "$PY3" "$(dirname "${BASH_SOURCE[0]}")/bridge-inbox.py" pending --self "$SELF" --project "$PROJECT" --limit 3 || true
+    fi
     echo "--- '$SEC' section of collaboration.md ---"
     _P="$BRIDGE_COLLAB" _SEC="$SEC" "$PY3" -c "
 import os
