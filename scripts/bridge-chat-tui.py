@@ -64,7 +64,11 @@ def render_chat(project, self_name, draft=""):
     if not msgs:
         lines.append("(no messages yet)")
     else:
-        for m in msgs[-30:]:
+        visible = msgs[-30:]
+        hidden = len(msgs) - len(visible)
+        if hidden:
+            lines.append("(上方还有 %d 条较早消息)" % hidden)
+        for m in visible:
             lines.append("%s: %s" % (m["speaker"], m["text"]))
     lines.extend(["", "> %s" % draft])
     return "\n".join(lines)

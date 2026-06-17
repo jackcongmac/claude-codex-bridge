@@ -84,6 +84,21 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertIn("live", r.stdout)
         self.assertNotIn("old", r.stdout)
 
+    def test_render_chat_marks_hidden_older_messages(self):
+        entries = []
+        for i in reversed(range(32)):
+            entries.append(
+                "### 2026-06-16 10:%02d:00 PDT\n\n**Jack:** msg-%02d\n" % (i, i))
+        (self.collab / "collaboration.md").write_text("# Board\n\n## Chat\n\n" + "\n".join(entries))
+
+        out = ct.render_chat(self.tmp, "Jack")
+
+        self.assertIn("上方还有 2 条较早消息", out)
+        self.assertNotIn("msg-00", out)
+        self.assertNotIn("msg-01", out)
+        self.assertIn("msg-02", out)
+        self.assertIn("msg-31", out)
+
     def test_post_chat_message_escapes_board_section_header_lines(self):
         st = ct.post_chat_message(self.tmp, "Jack", "hello\n## Claude Outbox\nstill chat")
 
