@@ -135,6 +135,57 @@ class ResponderLaunchTests(unittest.TestCase):
         cw.stop_responders([boom, ok])      # must not raise; must keep going
         self.assertTrue(ok.killed)
 
+    def test_refresh_responders_restarts_only_dead_handles(self):
+        class H:
+            def __init__(self, name, code=None):
+                self.name = name
+                self.code = code
+
+            def poll(self):
+                return self.code
+
+        live = H("live")
+        dead = H("dead", code=1)
+        spawned = []
+
+        handles = cw.refresh_responders([dead, live], "/proj", scripts_dir="/s",
+                                        spawn=lambda cmd: spawned.append(cmd) or H("new"))
+
+        self.assertEqual(handles[0].name, "new")
+        self.assertIs(handles[1], live)
+        self.assertEqual(len(spawned), 1)
+        self.assertEqual(spawned[0][spawned[0].index("--self") + 1], "Claude")
+
+    def test_shutdown_joins_supervisor_before_stopping_refreshed_handles(self):
+        class Event:
+            def __init__(self):
+                self.set_called = False
+
+            def set(self):
+                self.set_called = True
+
+        class Supervisor:
+            def __init__(self, handles):
+                self.handles = handles
+                self.joined = False
+
+            def join(self, timeout=None):
+                self.joined = True
+                self.handles[:] = ["replacement"]
+
+        handles = ["old"]
+        event = Event()
+        supervisor = Supervisor(handles)
+        stopped = []
+
+        cw.shutdown_supervised_responders(
+            handles, event, supervisor, join_timeout=0.1,
+            stop=lambda hs: stopped.extend(hs))
+
+        self.assertTrue(event.set_called)
+        self.assertTrue(supervisor.joined)
+        self.assertEqual(stopped, ["replacement"])
+
 
 class SkillTriggerTests(unittest.TestCase):
     def test_skill_documents_the_group_chat_trigger(self):

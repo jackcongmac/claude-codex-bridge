@@ -102,7 +102,8 @@ When the user says **"群聊"**, **"group chat"**, **"打开群聊"**, **"open g
    Delivery is at-least-once: a crash after posting a reply but before recording
    handled state can re-answer that one message. While an agent is generating, the
    web room shows it as "正在思考" from `<root>/.collab/chat_typing.json`; stale typing
-   entries age out automatically. Closing the server stops them. Pass
+   entries age out automatically. While the room stays open, the web server restarts
+   a responder if that responder process exits; closing the server stops them. Pass
    `--no-responders` to launch the window only.
 3. Tell the user: **go to the browser to chat.** In the room: type `@` to pick who you
    mean (Claude / Codex / 所有人); **only the @-mentioned agent replies**, `@All` = both,

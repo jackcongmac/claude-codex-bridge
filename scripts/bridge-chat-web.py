@@ -283,6 +283,45 @@ def start_responders(project, scripts_dir=None, spawn=None):
     return [spawn(cmd) for cmd in responder_cmds(scripts_dir, project)]
 
 
+def refresh_responders(handles, project, scripts_dir=None, spawn=None):
+    """Replace any responder process that has exited, preserving Claude/Codex order."""
+    scripts_dir = scripts_dir or os.path.dirname(os.path.abspath(__file__))
+    spawn = spawn or (lambda cmd: subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True))
+    cmds = responder_cmds(scripts_dir, project)
+    refreshed = list(handles or [])
+    for i, cmd in enumerate(cmds):
+        h = refreshed[i] if i < len(refreshed) else None
+        alive = h is not None and getattr(h, "poll", lambda: None)() is None
+        if not alive:
+            nh = spawn(cmd)
+            if i < len(refreshed):
+                refreshed[i] = nh
+            else:
+                refreshed.append(nh)
+    return refreshed
+
+
+def supervise_responders(handles, project, stop_event, interval=None, scripts_dir=None, spawn=None):
+    """Best-effort in-process supervisor while the web chat server is open."""
+    interval = float(interval or os.environ.get("BRIDGE_CHAT_RESPONDER_SUPERVISE_INTERVAL", "5"))
+    while not stop_event.wait(interval):
+        handles[:] = refresh_responders(handles, project, scripts_dir=scripts_dir, spawn=spawn)
+
+
+def shutdown_supervised_responders(handles, stop_event=None, supervisor=None, join_timeout=None, stop=None):
+    """Stop the supervisor before killing responder trees.
+
+    The supervisor mutates `handles` in place. Joining it first makes sure any
+    in-flight restart is reflected in `handles` before we terminate the process set.
+    """
+    if stop_event is not None:
+        stop_event.set()
+    if supervisor is not None:
+        supervisor.join(timeout=join_timeout)
+    (stop or stop_responders)(handles)
+
+
 def _kill_tree(h):
     """SIGTERM the responder's whole process group (a bare terminate() would leave the
     spawned claude/codex running and delay the shell's cleanup trap); SIGKILL the group
@@ -340,8 +379,17 @@ def main():
     url = "http://127.0.0.1:%d" % port
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
     responders = [] if a.no_responders else start_responders(httpd.project)
+    supervisor_stop = threading.Event()
+    supervisor = None
+    supervisor_interval = float(os.environ.get("BRIDGE_CHAT_RESPONDER_SUPERVISE_INTERVAL", "5"))
     if responders:
         print("已自动拉起 Claude / Codex 自动应答器:@ 谁谁就回(@All 两个都回)。")
+        supervisor = threading.Thread(
+            target=supervise_responders,
+            args=(responders, httpd.project, supervisor_stop),
+            kwargs={"interval": supervisor_interval},
+            daemon=True)
+        supervisor.start()
     if not a.no_open:
         try:
             webbrowser.open(url)
@@ -352,7 +400,11 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        stop_responders(responders)
+        shutdown_supervised_responders(
+            responders,
+            supervisor_stop if responders else None,
+            supervisor,
+            join_timeout=supervisor_interval + 2)
     return 0
 
 

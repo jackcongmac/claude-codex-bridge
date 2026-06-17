@@ -93,6 +93,11 @@ while an agent is generating; `bridge-chat-web.py` exposes `/status` and renders
 compact "正在思考" line. Stale typing entries are hidden by age so a crashed responder
 does not pin the UI forever.
 
+**Group chat responder supervision.** While `bridge-chat-web.py` is serving a room, it
+keeps one Claude responder and one Codex responder in order and restarts a responder
+whose process exits. This is bounded to the web server lifetime; a full always-on
+watcher/responder service remains the next reliability step.
+
 **Resource routing + dashboards.** Role presets (`apply-role-preset.py`),
 `bridge-status.py` (`--watch`). **Token control:** `compact-collaboration.sh` /
 `_compact.py` archive-rotate the board losslessly under lock.

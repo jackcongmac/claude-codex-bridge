@@ -204,6 +204,11 @@ a simple, durable convention that turns two agents into colleagues:
   `thinking` while Claude/Codex is generating a reply, and the web chat hides stale
   entries automatically if a responder dies before clearing them.
 
+When the web group chat is open, it starts one responder for Claude and one for Codex
+and lightly supervises them: if a responder process exits while the room is still open,
+the server starts that responder again. This is scoped to the chat server lifetime; it
+is not a full always-on watcher service.
+
 Drop both into a project (idempotent, never overwrites existing files):
 
 ```bash
