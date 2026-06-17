@@ -7,10 +7,12 @@ has approved. This converts a verbal "the peer reviewed it" claim into an audita
 artifact + a hard gate — exactly the gap that let an agent push unreviewed work and
 attribute a review that never happened.
 
-Honest boundary: until identity binding lands, `--self` is nominal, so a determined
-author could still self-certify by recording an entry as the peer. The gate raises
-the bar (auditable, requires a deliberate forged artifact) but is not anti-spoof on
-its own — see DESIGN/roadmap.
+Honest boundary: new ledger entries record `recorded_by` from the local agent
+environment, and the gate rejects approving entries with an explicit
+`recorded_by != reviewer` mismatch. Legacy entries without `recorded_by` still
+count for compatibility. This blocks the common "Codex records as Claude" footgun
+when the environment identifies Codex, but it is still not cryptographic identity
+binding — see DESIGN/roadmap.
 
 CLI:
   _review.py record --self R --sha S --verdict V [--target T] [--note N] [--bypass]
@@ -34,20 +36,36 @@ def _nonce():
     return "%x-%x" % (int(time.time() * 1000), os.getpid())
 
 
+def _detected_recorder(self_name, env=None):
+    env = env or os.environ
+    if env.get("CODEX_CI") or env.get("CODEX_THREAD_ID"):
+        return "Codex"
+    if (env.get("CLAUDECODE") or env.get("CLAUDE_CODE_ENTRYPOINT")
+            or env.get("CLAUDE_CODE") or env.get("CLAUDE_SESSION_ID")):
+        return "Claude"
+    return self_name
+
+
 def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False,
            wait=10.0):
-    """Append a review entry under the collaboration lock. Returns True/False."""
+    """Append a review entry under the collaboration lock.
+
+    Returns: "ok", "actor_mismatch", or "lockbusy".
+    """
+    recorded_by = _detected_recorder(reviewer)
+    if recorded_by != reviewer:
+        return "actor_mismatch"
     p = collab_paths(project)
     entry = {"reviewer": reviewer, "sha": sha, "verdict": (verdict or "").upper(),
              "target": target, "note": note, "bypass": bool(bypass),
-             "ts": now_str(), "nonce": _nonce()}
+             "recorded_by": recorded_by, "ts": now_str(), "nonce": _nonce()}
     if not acquire_lock(p["lock"], "review-%s" % reviewer, ttl=30, wait=wait):
-        return False
+        return "lockbusy"
     try:
         led = read_json(p["reviews"], default={"reviews": []}) or {"reviews": []}
         led.setdefault("reviews", []).append(entry)
         atomic_write_json(p["reviews"], led)
-        return True
+        return "ok"
     finally:
         release_lock(p["lock"])
 
@@ -58,17 +76,22 @@ def has_approval(project, sha, exclude_actor):
     p = collab_paths(project)
     led = read_json(p["reviews"], default={"reviews": []}) or {"reviews": []}
     for e in led.get("reviews", []):
+        recorded_by = e.get("recorded_by")
         if (e.get("sha") == sha and not e.get("bypass")
                 and (e.get("verdict") or "").upper() in APPROVING
+                and (recorded_by is None or recorded_by == e.get("reviewer"))
                 and e.get("reviewer") and e.get("reviewer") != exclude_actor):
             return True
     return False
 
 
 def cmd_record(args):
-    ok = record(find_project_root(args.project), args.self_name, args.sha,
+    st = record(find_project_root(args.project), args.self_name, args.sha,
                 args.verdict, args.target, args.note, args.bypass)
-    if not ok:
+    if st == "actor_mismatch":
+        print("ACTOR_MISMATCH: recorder environment does not match --self", file=sys.stderr)
+        return 6
+    if st != "ok":
         print("LOCKBUSY", file=sys.stderr)
         return 3
     return 0

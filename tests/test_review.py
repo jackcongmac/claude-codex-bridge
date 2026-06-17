@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -23,10 +24,19 @@ class ReviewLedgerTests(unittest.TestCase):
         (self.collab / "collaboration_signal.json").write_text(
             json.dumps({"update_id": 0}))
 
-    def _record(self, *args):
+    def _record(self, *args, env=None):
+        run_env = os.environ.copy()
+        run_env.pop("CODEX_CI", None)
+        run_env.pop("CODEX_THREAD_ID", None)
+        run_env.pop("CLAUDECODE", None)
+        run_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
+        run_env.pop("CLAUDE_CODE", None)
+        run_env.pop("CLAUDE_SESSION_ID", None)
+        if env:
+            run_env.update(env)
         return subprocess.run(
             [sys.executable, str(REVIEW), "record", "--project", self.tmp, *args],
-            capture_output=True, text=True, timeout=20)
+            capture_output=True, text=True, timeout=20, env=run_env)
 
     def _check(self, sha, exclude):
         return subprocess.run(
@@ -66,6 +76,56 @@ class ReviewLedgerTests(unittest.TestCase):
         led = json.loads((self.collab / "collaboration_reviews.json").read_text())
         shas = {e["sha"] for e in led["reviews"]}
         self.assertEqual(shas, {"s1", "s2"})
+
+    def test_recorded_by_is_written_and_must_match_reviewer(self):
+        self._record("--self", "Codex", "--sha", "abc123", "--verdict", "SHIP",
+                     env={"CODEX_CI": "1"})
+        led = json.loads((self.collab / "collaboration_reviews.json").read_text())
+
+        self.assertEqual(led["reviews"][0]["recorded_by"], "Codex")
+        self.assertEqual(self._check("abc123", "Claude").returncode, 0)
+
+    def test_codex_environment_cannot_record_as_claude(self):
+        r = self._record("--self", "Claude", "--sha", "abc123", "--verdict", "SHIP",
+                         env={"CODEX_CI": "1"})
+
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ACTOR_MISMATCH", r.stderr)
+        self.assertNotEqual(self._check("abc123", "Codex").returncode, 0)
+
+    def test_claude_code_environment_can_record_as_claude(self):
+        r = self._record("--self", "Claude", "--sha", "abc123", "--verdict", "SHIP",
+                         env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
+        led = json.loads((self.collab / "collaboration_reviews.json").read_text())
+
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(led["reviews"][0]["recorded_by"], "Claude")
+        self.assertEqual(self._check("abc123", "Codex").returncode, 0)
+
+    def test_mismatched_recorded_by_does_not_approve(self):
+        (self.collab / "collaboration_reviews.json").write_text(json.dumps({
+            "reviews": [{
+                "reviewer": "Claude",
+                "recorded_by": "Codex",
+                "sha": "abc123",
+                "verdict": "SHIP",
+                "bypass": False,
+            }]
+        }))
+
+        self.assertNotEqual(self._check("abc123", "Codex").returncode, 0)
+
+    def test_legacy_entry_without_recorded_by_still_approves(self):
+        (self.collab / "collaboration_reviews.json").write_text(json.dumps({
+            "reviews": [{
+                "reviewer": "Claude",
+                "sha": "abc123",
+                "verdict": "SHIP",
+                "bypass": False,
+            }]
+        }))
+
+        self.assertEqual(self._check("abc123", "Codex").returncode, 0)
 
     def test_verdict_is_case_insensitive(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "ship")

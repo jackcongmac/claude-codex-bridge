@@ -122,12 +122,14 @@ several were lived during development.
 - ✅ **Review-before-merge is now gated (shipped, `bridge-push` + review ledger).**
   Push refuses (exit 4) any HEAD no peer recorded a SHIP/GO for; the only escape is an
   AUDITED `--no-review`. Converts the governance failure (push unreviewed + attribute
-  a review that never happened) into a hard, auditable gate.
-- 🔴 **Identity is still spoofable (open — the remaining trust gap).** `join` /
-  `_handshake.py ack` / the review ledger trust `--self` with no secret or process
-  binding. The gate makes a review an auditable artifact + hard gate, but a determined
-  author could still self-certify by recording an entry as the peer. Anti-spoof needs
-  identity binding.
+  a review that never happened) into a hard, auditable gate. New ledger entries include
+  `recorded_by`; approving entries with an explicit `recorded_by != reviewer` mismatch
+  are rejected, while legacy entries without the field still count for compatibility.
+  A Codex-identified environment is rejected if it tries to record as Claude.
+- 🔴 **Identity is still not cryptographic (open — the remaining trust gap).** `join` /
+  `_handshake.py ack` / the review ledger still need stronger identity binding. The
+  `recorded_by` check blocks the common author-transcribes-peer-review footgun, but a
+  determined local actor with full shell control is still outside the trust model.
 - **File lanes are advisory** (announced, not locked); two agents can clobber the
   same file. The push-lock serializes pushes, not working-tree edits.
 - **Release coordination is still convention** — the gate covers pushes, not GitHub

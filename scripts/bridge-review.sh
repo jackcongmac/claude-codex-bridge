@@ -3,6 +3,8 @@
 # bridge-review.sh — record a peer review verdict bound to a commit SHA. This is what
 # the bridge-push gate checks: a commit can't be pushed unless a PEER recorded a
 # SHIP/GO for that SHA. Run this AS THE REVIEWER, after reviewing the author's commit.
+# The ledger records the detected local actor as `recorded_by`; Codex environments
+# cannot record entries as Claude.
 #
 # Usage:
 #   bridge-review.sh --self <reviewer> --verdict SHIP|GO|FIX-FIRST|REVISE \
