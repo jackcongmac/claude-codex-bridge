@@ -52,6 +52,16 @@ class BridgeChatTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("anyone there", r.stdout)
 
+    def test_read_hides_hidden_chat_id_comments(self):
+        self._chat("--self", "Jack", "--message", "hello team")
+        self.assertIn("chat-id", self._board())
+
+        r = self._chat()
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("hello team", r.stdout)
+        self.assertNotIn("chat-id", r.stdout)
+
     def test_read_shows_messages_oldest_first(self):
         # the chat READ view is chronological (oldest top, newest bottom) even though
         # the board stores entries newest-first.

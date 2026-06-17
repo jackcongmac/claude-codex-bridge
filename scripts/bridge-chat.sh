@@ -64,21 +64,26 @@ fi
 
 print_chat() {
   _HERE="$HERE" _BOARD="$BOARD" "$PY3" - <<'PY'
-import os, re, sys
+import importlib.util
+import os
+import sys
 sys.path.insert(0, os.environ["_HERE"])
 from bridge_common import read_section
+
+path = os.path.join(os.environ["_HERE"], "bridge-chat-web.py")
+spec = importlib.util.spec_from_file_location("chatweb", path)
+chatweb = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(chatweb)
+
 sec = read_section(os.environ["_BOARD"], "Chat")
-if not sec:
+msgs = chatweb.parse_chat(sec)
+if not msgs:
     print('(no messages yet — post with: bridge-chat.sh --self <Me> --message "…")')
 else:
-    # Entries are stored newest-first (feed style); show OLDEST-first so it reads like a
-    # chat. Split ONLY on a real entry header, which _append_under_header writes as the
-    # FULL timestamp "### YYYY-MM-DD HH:MM:SS <TZ>" — so a "### …" line (even a dated one)
-    # a user types inside a message won't be mistaken for an entry boundary. (Heuristic
-    # keyed to the entry-header format; a structured chat log is a later, non-MVP polish.)
-    parts = re.split(r'\n(?=### \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )', sec)
-    head, entries = parts[0], parts[1:]
-    print("\n".join([head] + list(reversed(entries))))
+    print("## Chat\n")
+    for msg in msgs:
+        print("### %s\n" % msg["ts"])
+        print("**%s:** %s\n" % (msg["speaker"], msg["text"]))
 PY
 }
 
