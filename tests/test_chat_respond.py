@@ -112,6 +112,28 @@ class RespondOnceTests(unittest.TestCase):
         self.assertEqual(len(handled), 2)
         self.assertEqual(sorted(m.get("duplicate") for m in delivery["messages"].values()), [0, 1])
 
+    def test_chat_ids_keep_processed_message_stable_when_duplicate_arrives_later(self):
+        self.collab.joinpath("collaboration.md").write_text(
+            "# Board\n\n## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m1 -->\n**Jack:** @Claude repeat\n")
+
+        self.assertEqual(self._run("Claude", reply="PASS"), "passed")
+        delivery = json.loads((self.collab / "chat_delivery.json").read_text())
+        first_handled = set(delivery["agents"]["Claude"]["handled"])
+
+        self.collab.joinpath("collaboration.md").write_text(
+            "# Board\n\n## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m2 -->\n**Jack:** @Claude repeat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m1 -->\n**Jack:** @Claude repeat\n")
+
+        self.assertEqual(self._run("Claude", reply="PASS"), "passed")
+        delivery = json.loads((self.collab / "chat_delivery.json").read_text())
+        handled = set(delivery["agents"]["Claude"]["handled"])
+
+        self.assertEqual(len(handled), 2)
+        self.assertTrue(first_handled.issubset(handled))
+        self.assertEqual(sorted(m.get("id") for m in delivery["messages"].values()), ["m1", "m2"])
+
     def test_empty_chat_is_noop(self):
         (self.collab / "collaboration.md").write_text("# Board\n")
         self.assertEqual(self._run("Claude"), "empty")

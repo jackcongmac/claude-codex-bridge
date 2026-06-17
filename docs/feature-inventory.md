@@ -85,9 +85,10 @@ lock with epoch fencing.
 messages on startup and write per-agent handled ids to `.collab/chat_delivery.json`,
 so an offline agent can replay missed @ messages with best-effort handled-id dedupe.
 This is at-least-once delivery: a crash between posting a reply and recording handled
-state can re-answer that one message. Message ids keep the legacy timestamp/speaker/text
-shape for ordinary messages, and add a stable duplicate ordinal only when same-second
-same-speaker same-text messages would otherwise collide.
+state can re-answer that one message. New chat messages include a hidden stable
+`chat-id` marker used for delivery ids; legacy messages without that marker keep the
+timestamp/speaker/text shape, with a duplicate ordinal fallback only when same-second
+same-speaker same-text legacy messages would otherwise collide.
 
 **Group chat thinking indicator.** `_chat_respond.py` writes `.collab/chat_typing.json`
 while an agent is generating; `bridge-chat-web.py` exposes `/status` and renders a

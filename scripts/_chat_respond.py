@@ -66,6 +66,9 @@ def _same_msg(a, b):
 
 
 def _message_id(msg):
+    if msg.get("_id"):
+        raw = json.dumps(["id", msg.get("_id")], ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
     parts = [msg.get(k, "") for k in _KEY]
     if "_dup" in msg:
         parts.append(msg.get("_dup"))
@@ -102,6 +105,8 @@ def _mark_delivery(project, self_name, msg, status):
             "text": msg.get("text", ""),
             "targets": sorted(_targets(msg)),
         }
+        if msg.get("_id"):
+            delivery["messages"][mid]["id"] = msg.get("_id")
         if "_dup" in msg:
             delivery["messages"][mid]["duplicate"] = msg.get("_dup")
         agent = delivery.setdefault("agents", {}).setdefault(self_name, {"handled": {}})

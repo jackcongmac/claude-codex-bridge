@@ -32,6 +32,7 @@ from _post import post as _board_post  # noqa: E402
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
 _BOARD_SECTION_LINE = re.compile(r'(?m)^(##)(?=\s|$)')
+_CHAT_ID = re.compile(r'^<!--\s*chat-id:([A-Za-z0-9_.:-]+)\s*-->\s*', re.S)
 
 
 def sanitize_chat_text(text):
@@ -39,8 +40,9 @@ def sanitize_chat_text(text):
     return _BOARD_SECTION_LINE.sub(r'\\##', text or "")
 
 
-def format_chat_message(speaker, text):
-    return "**%s:** %s" % (speaker, sanitize_chat_text(text))
+def format_chat_message(speaker, text, msg_id=None):
+    msg_id = msg_id or secrets.token_hex(8)
+    return "<!-- chat-id:%s -->\n**%s:** %s" % (msg_id, speaker, sanitize_chat_text(text))
 
 
 def parse_chat(section):
@@ -54,17 +56,24 @@ def parse_chat(section):
         if not m:
             continue
         body = m.group(2).strip()
+        im = _CHAT_ID.match(body)
+        msg_id = im.group(1) if im else None
+        if im:
+            body = body[im.end():].strip()
         sm = _SPEAKER.match(body)
         speaker, text = (sm.group(1).strip(), sm.group(2).strip()) if sm else ("?", body)
-        msgs.append({"ts": m.group(1).strip(), "speaker": speaker, "text": text})
+        msg = {"ts": m.group(1).strip(), "speaker": speaker, "text": text}
+        if msg_id:
+            msg["_id"] = msg_id
+        msgs.append(msg)
     msgs.reverse()   # board stores newest-first
     counts = {}
     for msg in msgs:
-        key = (msg["ts"], msg["speaker"], msg["text"])
+        key = ("id", msg["_id"]) if msg.get("_id") else (msg["ts"], msg["speaker"], msg["text"])
         counts[key] = counts.get(key, 0) + 1
     seen = {}
     for msg in msgs:
-        key = (msg["ts"], msg["speaker"], msg["text"])
+        key = ("id", msg["_id"]) if msg.get("_id") else (msg["ts"], msg["speaker"], msg["text"])
         if counts[key] > 1:
             msg["_dup"] = seen.get(key, 0)
             seen[key] = msg["_dup"] + 1

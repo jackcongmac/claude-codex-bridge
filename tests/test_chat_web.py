@@ -36,6 +36,22 @@ class ParseChatTests(unittest.TestCase):
         self.assertEqual([(m["speaker"], m["text"]) for m in msgs],
                          [("Jack", "first"), ("Codex", "second")])
 
+    def test_format_chat_message_adds_hidden_stable_id(self):
+        body = cw.format_chat_message("Jack", "hello", msg_id="m1")
+
+        self.assertIn("<!-- chat-id:m1 -->", body)
+        self.assertIn("**Jack:** hello", body)
+
+    def test_parse_chat_extracts_hidden_id_without_showing_it(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            "<!-- chat-id:m1 -->\n**Jack:** hello\n")
+        msgs = cw.parse_chat(section)
+
+        self.assertEqual(msgs[0]["_id"], "m1")
+        self.assertEqual(msgs[0]["text"], "hello")
+
     def test_message_with_inner_heading_is_not_split(self):
         section = (
             "## Chat\n\n"
@@ -52,6 +68,16 @@ class ParseChatTests(unittest.TestCase):
         msgs = cw.parse_chat(section)
 
         self.assertEqual([m.get("_dup") for m in msgs], [0, 1])
+
+    def test_duplicate_messages_with_ids_do_not_need_ordinals(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m2 -->\n**Jack:** @Claude repeat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m1 -->\n**Jack:** @Claude repeat\n")
+        msgs = cw.parse_chat(section)
+
+        self.assertEqual([m.get("_id") for m in msgs], ["m1", "m2"])
+        self.assertEqual([m.get("_dup") for m in msgs], [None, None])
 
 
 class ServerRoundTripTests(unittest.TestCase):
