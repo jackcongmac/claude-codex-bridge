@@ -62,6 +62,19 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertIn("Claude 正在思考", r.stdout)
 
 
+class ChatTuiLoaderTests(unittest.TestCase):
+    def tearDown(self):
+        ct._CHATWEB_MODULE = None
+
+    def test_chatweb_loader_is_cached(self):
+        ct._CHATWEB_MODULE = None
+
+        first = ct._load_chatweb()
+        second = ct._load_chatweb()
+
+        self.assertIs(first, second)
+
+
 class ChatTuiDocsTests(unittest.TestCase):
     def test_skill_documents_terminal_group_chat_and_escape_exit(self):
         text = (ROOT / "skill" / "SKILL.md").read_text()

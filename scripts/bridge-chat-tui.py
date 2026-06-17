@@ -18,13 +18,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import collab_paths, find_project_root, read_json, read_section  # noqa: E402
 from _post import post as _board_post  # noqa: E402
 
+_CHATWEB_MODULE = None
+
 
 def _load_chatweb():
+    global _CHATWEB_MODULE
+    if _CHATWEB_MODULE is not None:
+        return _CHATWEB_MODULE
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge-chat-web.py")
     spec = importlib.util.spec_from_file_location("chatweb", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod
+    _CHATWEB_MODULE = mod
+    return _CHATWEB_MODULE
 
 
 def post_chat_message(project, self_name, text):
