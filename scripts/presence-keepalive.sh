@@ -49,7 +49,7 @@ while true; do
     break
   fi
   OLDPID="$(cat "$PIDFILE" 2>/dev/null || echo "")"
-  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+  if bridge_pid_alive "$OLDPID"; then
     echo "[!] a presence-keepalive for '$SELF' is already running (pid $OLDPID) in $BRIDGE_COLLAB — not starting a duplicate." >&2
     exit 0
   fi

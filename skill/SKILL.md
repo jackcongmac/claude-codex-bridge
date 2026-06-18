@@ -159,7 +159,8 @@ scripts/bridge-autostart.sh --self <You> --peer <Them> --project <root>
 ```
 
 `board-wait.sh` must be started by the agent/harness as the tracked background task;
-its exit is what wakes the agent. `bridge-autostart.sh` then joins the board, starts
+it exits on peer updates, not quiet timeouts, and that exit is what wakes the agent.
+`bridge-autostart.sh` then joins the board, starts
 liveness, runs `bridge-handshake.sh`, and reports GO/NO-GO. A NO-GO leaves a board
 invite for the peer and prints the exact fix, but it is non-blocking for work that
 does not require a peer handoff. Keep the existing rule: one-off MCP calls spawn a

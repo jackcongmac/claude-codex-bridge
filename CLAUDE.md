@@ -11,7 +11,8 @@ scripts/bridge-autostart.sh --self Claude --peer Codex --role <peer|planner|exec
 ```
 
 `board-wait.sh` must be started by Claude Code as the harness-tracked background task;
-its exit is what wakes Claude. `bridge-autostart.sh` then performs the proactive
+it exits on peer updates, not quiet timeouts, and that exit is what wakes Claude.
+`bridge-autostart.sh` then performs the proactive
 handshake: joins the board, starts liveness, runs `bridge-handshake.sh`, and reports
 GO/NO-GO clearly. If NO-GO, it leaves a board invite and prints the exact peer fix;
 that failure is non-blocking for work that does not require a handoff.

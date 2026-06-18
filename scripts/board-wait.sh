@@ -15,13 +15,15 @@
 #   board-wait.sh --self <YourName> [--project DIR] [--since <update_id>]
 #                 [--timeout SEC] [--interval SEC] [--stay-armed]
 #
-# Default mode: exit 0 + print "CHANGED ..." when the peer updates, or "TIMEOUT ..."
-# when --timeout elapses. That legacy wake-on-exit mode requires immediate re-arm.
+# Default mode: wait indefinitely until the peer updates, then exit 0 + print
+# "CHANGED ...". Do NOT time out by default: if the harness misses a timeout wake,
+# the agent silently falls out of liveness and the peer sees "DEPARTED". TIMEOUT is
+# available only when explicitly requested with --timeout or BRIDGE_BOARD_WAIT_TIMEOUT.
 # With --stay-armed, print each CHANGED/TIMEOUT event and keep listening so the
 # panel remains handshake-live across peer updates.
 set -euo pipefail
 
-SELF=""; PROJECT="$PWD"; SINCE=""; TIMEOUT="${BRIDGE_BOARD_WAIT_TIMEOUT:-1800}"; INTERVAL="${BRIDGE_BOARD_WAIT_INTERVAL:-5}"; STAY_ARMED=0
+SELF=""; PROJECT="$PWD"; SINCE=""; TIMEOUT="${BRIDGE_BOARD_WAIT_TIMEOUT:-}"; INTERVAL="${BRIDGE_BOARD_WAIT_INTERVAL:-5}"; STAY_ARMED=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
@@ -52,7 +54,7 @@ while true; do
     break
   fi
   OLDPID="$(cat "$PIDFILE" 2>/dev/null || echo "")"
-  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+  if bridge_pid_alive "$OLDPID"; then
     echo "[!] a board-wait for '$SELF' is already armed (pid $OLDPID) in $BRIDGE_COLLAB — not starting a duplicate." >&2
     exit 0
   fi
@@ -66,7 +68,7 @@ field() { _S="$SIGNAL" _K="$1" "$PY3" -c "import json,os;print(json.load(open(os
 # Baseline: the update_id we start from (default = current).
 [ -n "$SINCE" ] || SINCE="$(field update_id)"
 
-DEADLINE=$(( $(date +%s) + TIMEOUT ))
+[ -z "$TIMEOUT" ] || DEADLINE=$(( $(date +%s) + TIMEOUT ))
 while true; do
   # Presence tick: refresh my heartbeat + broadcast any peer whose window closed
   # (went stale). A broadcast bumps the signal, which the loop below then sees.
@@ -99,12 +101,12 @@ else:
 " 2>/dev/null || true
     if [ "$STAY_ARMED" = "1" ]; then
       SINCE="$UID_NOW"
-      DEADLINE=$(( $(date +%s) + TIMEOUT ))
+      [ -z "$TIMEOUT" ] || DEADLINE=$(( $(date +%s) + TIMEOUT ))
       continue
     fi
     exit 0
   fi
-  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+  if [ -n "$TIMEOUT" ] && [ "$(date +%s)" -ge "$DEADLINE" ]; then
     echo "TIMEOUT no peer update in ${TIMEOUT}s (since update_id=$SINCE) — re-arm to keep waiting."
     if [ "$STAY_ARMED" = "1" ]; then
       SINCE="$(field update_id)"

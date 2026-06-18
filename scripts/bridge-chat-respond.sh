@@ -50,7 +50,7 @@ while true; do
     break
   fi
   OLDPID="$(cat "$PIDFILE" 2>/dev/null || echo "")"
-  if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+  if bridge_pid_alive "$OLDPID"; then
     echo "[!] a chat responder for '$SELF' is already running (pid $OLDPID) — not starting a duplicate." >&2
     exit 0
   fi

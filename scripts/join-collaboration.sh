@@ -83,7 +83,8 @@ YOUR NEXT ACTIONS:
   4. When board-wait exits: if CHANGED on the peer Outbox, inspect + receipt it:
        $HERE/bridge-inbox.sh pending --self "$SELF" --project "$PROJECT"
        $HERE/bridge-inbox.sh ack --self "$SELF" --project "$PROJECT" --status CLAIM --note "<what you will do>"
-     Then act + reply via bridge-post.sh + re-ARM. If TIMEOUT, just re-ARM.
+     Then act + reply via bridge-post.sh + re-ARM. TIMEOUT only happens if you
+     explicitly pass --timeout; if it does, just re-ARM.
      Never treat silence as "peer is done" — verify liveness.
   5. Before handing real work to the peer, CONFIRM the channel is live:
        $HERE/bridge-handshake.sh --self "$SELF" --peer <Them>

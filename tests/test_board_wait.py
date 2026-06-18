@@ -65,6 +65,32 @@ class BoardWaitStayArmedTests(unittest.TestCase):
                 break
         self.fail("did not see %r before exit/timeout; saw: %s" % (needle, seen))
 
+    def test_default_wait_has_no_quiet_timeout(self):
+        self._join("Codex")
+        env = {**os.environ, "BRIDGE_BOARD_WAIT_INTERVAL": "0.2"}
+        env.pop("BRIDGE_BOARD_WAIT_TIMEOUT", None)
+        waiter = subprocess.Popen(
+            [str(SCRIPTS / "board-wait.sh"), "--self", "Codex",
+             "--project", self.tmp, "--interval", "0.2"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.procs.append(waiter)
+        self._wait_for_pidfile("Codex")
+        time.sleep(1.0)
+        self.assertIsNone(waiter.poll(), "default board-wait must not quiet-timeout")
+
+    def test_explicit_timeout_still_exits(self):
+        self._join("Codex")
+        env = {**os.environ, "BRIDGE_BOARD_WAIT_INTERVAL": "0.2"}
+        env.pop("BRIDGE_BOARD_WAIT_TIMEOUT", None)
+        waiter = subprocess.Popen(
+            [str(SCRIPTS / "board-wait.sh"), "--self", "Codex",
+             "--project", self.tmp, "--interval", "0.2", "--timeout", "1"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        self.procs.append(waiter)
+        output = self._read_until(waiter, "TIMEOUT", timeout=4)
+        self.assertIn("no peer update in 1s", output)
+        self.assertEqual(waiter.wait(timeout=2), 0)
+
     def test_stay_armed_survives_peer_update_and_still_pongs_handshake(self):
         self._join("Claude")
         self._join("Codex")

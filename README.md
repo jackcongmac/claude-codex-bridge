@@ -265,9 +265,9 @@ scripts/bridge-live.sh --self Codex --project .
 
 `bridge-live` registers you on the board, starts one `presence-keepalive`
 process if needed, prints the current liveness report, and gives you the exact
-`board-wait` command to run in the background. The default command preserves
-wake-on-exit; `--stay-armed` is an optional liveness/pong helper and is not the
-interactive pane's wake task.
+`board-wait` command to run in the background. The default command exits on peer
+updates, not quiet timeouts; `--stay-armed` is an optional liveness/pong helper and
+is not the interactive pane's wake task.
 
 When `board-wait` wakes on the peer's Outbox, treat that Outbox as your Inbox:
 

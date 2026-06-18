@@ -132,6 +132,25 @@ class HandshakeStaticCheckTests(unittest.TestCase):
         self.assertIn("CLOSED", r.stdout)
         self.assertIn("OPEN", r.stdout)
 
+    def test_self_arm_pid_with_permission_denied_is_treated_as_live(self):
+        tmp = tempfile.mkdtemp()
+        subprocess.run([str(SCRIPTS / "init-collaboration.sh"), tmp],
+                       capture_output=True, text=True)
+        for who in ("Claude", "Codex"):
+            subprocess.run([str(SCRIPTS / "join-collaboration.sh"),
+                            "--self", who, "--role", "peer", "--project", tmp],
+                           capture_output=True, text=True)
+        pathlib.Path(tmp, ".collab", ".boardwait_Claude.pid").write_text("1\n")
+
+        r = subprocess.run(
+            [str(SCRIPTS / "bridge-handshake.sh"), "--self", "Claude",
+             "--peer", "Codex", "--project", tmp, "--no-transport",
+             "--timeout", "0.2", "--interval", "0.05"],
+            capture_output=True, text=True)
+
+        self.assertIn("I (Claude) am ARMed", r.stdout)
+        self.assertNotIn("I (Claude) am NOT ARMed", r.stdout)
+
 
 class BoardWaitHandshakeIntegrationTests(unittest.TestCase):
     """A live ARMed board-wait must pong; bridge-handshake must GO then NO-GO."""

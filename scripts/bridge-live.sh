@@ -4,9 +4,9 @@
 #
 # It registers the agent, starts the presence keepalive if it is not already
 # running, prints current liveness, and gives the exact board-wait ARM command.
-# The default ARM command preserves wake-on-exit: board-wait exits on CHANGED/TIMEOUT
-# so the agent harness can wake the interactive pane. --stay-armed is an optional
-# liveness/pong helper, not the default wake task.
+# The default ARM command preserves wake-on-peer-update: board-wait exits on CHANGED
+# so the agent harness can wake the interactive pane. It does not time out unless
+# explicitly requested, because a missed timeout wake looks like a silent departure.
 set -euo pipefail
 
 SELF=""; ROLE="peer"; PROJECT="$PWD"; KEEPALIVE_INTERVAL="${BRIDGE_KEEPALIVE_INTERVAL:-10}"
@@ -50,7 +50,7 @@ else
   OLDPID=""
 fi
 
-if [ -n "$OLDPID" ] && kill -0 "$OLDPID" 2>/dev/null; then
+if bridge_pid_alive "$OLDPID"; then
   echo "presence-keepalive already running for $SELF (pid $OLDPID)"
 else
   "$HERE/presence-keepalive.sh" --self "$SELF" --project "$PROJECT" \
@@ -70,6 +70,7 @@ cat <<EOF
 
 ARM board-wait in the background after this turn:
   $HERE/board-wait.sh --self "$SELF" --project "$PROJECT" &
+Default board-wait has no quiet timeout; it should stay live until a peer update.
 When it wakes on the peer Outbox, receipt the handoff:
   $HERE/bridge-inbox.sh pending --self "$SELF" --project "$PROJECT"
   $HERE/bridge-inbox.sh ack --self "$SELF" --project "$PROJECT" --status CLAIM --note "<what you will do>"

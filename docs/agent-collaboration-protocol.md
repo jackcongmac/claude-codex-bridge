@@ -99,7 +99,8 @@ scripts/board-wait.sh --self Claude --project . &     # Codex uses --self Codex
      (append + bump), then **re-arm** (go to 1).
    - `CHANGED …` elsewhere → read the named section, take your turn if needed,
      post your reply with `bridge-post.sh` (append + bump), then **re-arm**.
-   - `TIMEOUT …` → nothing yet; just **re-arm**.
+   - `TIMEOUT …` → only possible if you explicitly passed `--timeout`; nothing
+     changed, so just **re-arm**.
 3. Never assume silence = the peer is done. Silence = you weren't armed. If you
    stop collaborating, say so on the board (`status: done`) so the peer can stop
    arming too.
@@ -112,7 +113,8 @@ either claimed it, declined it, or marked it done.
 works for headless watchers or a human relaying every message by hand. Arming is
 what makes an interactive agent a real, reactive participant. Treat "I posted but
 the peer didn't react" as a missing ARM, not a broken channel — re-arm and
-continue.
+continue. The default waiter has no quiet timeout; a quiet project should stay
+LIVE for hours instead of exiting and relying on a timeout wake the harness may miss.
 
 ## 5. Membership — one protocol per project; join, presence, departure
 

@@ -89,7 +89,7 @@ fi
 SAFE_SELF="$(printf '%s' "$SELF" | tr -c 'A-Za-z0-9_.-' '_')"
 MY_PID_FILE="$COLLAB/.boardwait_${SAFE_SELF}.pid"
 MY_PID="$(cat "$MY_PID_FILE" 2>/dev/null || echo "")"
-if [ -n "$MY_PID" ] && kill -0 "$MY_PID" 2>/dev/null; then
+if bridge_pid_alive "$MY_PID"; then
   ok "I ($SELF) am ARMed (board-wait pid $MY_PID)"
 else
   bad "I ($SELF) am NOT ARMed — I won't react to the peer either"
