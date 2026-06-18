@@ -16,7 +16,9 @@ default --stale-after is generous (1800s / 30 min) — a shorter window
 false-flags a present-but-bursty agent as departed. A departed flag self-heals:
 any join/board write by that agent sets departed=false again.
 
-Usage: _presence.py tick --self NAME --project DIR [--stale-after SEC]
+Usage:
+  _presence.py tick --self NAME --project DIR [--stale-after SEC]
+  _presence.py departures --self NAME --project DIR [--stale-after SEC]
 Prints "DEPARTED <name>" for each peer it broadcasts as gone (else nothing).
 """
 import os
@@ -97,7 +99,7 @@ def register(project, self_name, role="peer", wait=10.0):
         bc.release_lock(lock_p, "register-%s" % self_name)
 
 
-def tick(project, self_name, stale_after):
+def scan_departures(project, self_name, stale_after):
     P = bc.collab_paths(project)
     parts_p = P["participants"]
     board_p = P["board"]
@@ -106,10 +108,6 @@ def tick(project, self_name, stale_after):
     now = time.time()
     now_s = bc.now_str()
 
-    # 1) heartbeat: refresh my last_seen (shared with the keepalive).
-    heartbeat(project, self_name)
-
-    # 2) departure scan
     reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
     gone = [a for a in reg["participants"]
             if a.get("name") != self_name and not a.get("departed")
@@ -146,6 +144,12 @@ def tick(project, self_name, stale_after):
     return broadcast
 
 
+def tick(project, self_name, stale_after):
+    # board-wait uses the combined tick: one heartbeat plus the shared departure scan.
+    heartbeat(project, self_name)
+    return scan_departures(project, self_name, stale_after)
+
+
 def main():
     ap = argparse.ArgumentParser()
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -153,6 +157,10 @@ def main():
     t.add_argument("--self", dest="self_name", required=True)
     t.add_argument("--project", default=None)
     t.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "1800")))
+    d = sub.add_parser("departures")
+    d.add_argument("--self", dest="self_name", required=True)
+    d.add_argument("--project", default=None)
+    d.add_argument("--stale-after", type=int, default=int(os.environ.get("BRIDGE_PRESENCE_STALE", "1800")))
     h = sub.add_parser("heartbeat")
     h.add_argument("--self", dest="self_name", required=True)
     h.add_argument("--project", default=None)
@@ -165,6 +173,9 @@ def main():
     proj = os.path.abspath(a.project) if a.project else bc.find_project_root()
     if a.cmd == "tick":
         for name in tick(proj, a.self_name, a.stale_after):
+            print("DEPARTED %s" % name)
+    elif a.cmd == "departures":
+        for name in scan_departures(proj, a.self_name, a.stale_after):
             print("DEPARTED %s" % name)
     elif a.cmd == "heartbeat":
         heartbeat(proj, a.self_name)

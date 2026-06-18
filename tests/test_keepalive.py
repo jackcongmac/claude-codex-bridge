@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -93,11 +94,46 @@ class KeepaliveScriptTests(unittest.TestCase):
         (self.collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
         (self.collab / "collaboration_participants.json").write_text(json.dumps(
             {"participants": [{"name": "Claude", "last_seen": OLD, "departed": False}]}))
+        (self.collab / "collaboration.md").write_text(
+            "# Board\n\n## Claude Outbox\n\n## Participants\n\n## Liveness\n")
 
     def _last_seen(self):
         parts = json.loads(
             (self.collab / "collaboration_participants.json").read_text())["participants"]
         return next(a for a in parts if a["name"] == "Claude")["last_seen"]
+
+    def _participants(self, parts):
+        (self.collab / "collaboration_participants.json").write_text(
+            json.dumps({"participants": parts}))
+
+    def _read_parts(self):
+        return json.loads(
+            (self.collab / "collaboration_participants.json").read_text())["participants"]
+
+    def _board(self):
+        return (self.collab / "collaboration.md").read_text()
+
+    def _stamp(self, epoch=None):
+        return time.strftime("%Y-%m-%d %H:%M:%S PDT",
+                             time.localtime(time.time() if epoch is None else epoch))
+
+    def _wait_for(self, predicate, message, timeout=4):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if predicate():
+                return
+            time.sleep(0.1)
+        self.fail(message)
+
+    def _start_keepalive(self, who="Codex", env=None):
+        return subprocess.Popen(
+            [str(KEEPALIVE), "--self", who, "--project", self.tmp, "--interval", "0.2"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env={**os.environ, **(env or {})})
+
+    def _stop(self, proc):
+        proc.terminate()
+        proc.wait(timeout=5)
 
     def test_keepalive_refreshes_last_seen_and_writes_pidfile(self):
         p = subprocess.Popen(
@@ -132,6 +168,49 @@ class KeepaliveScriptTests(unittest.TestCase):
         finally:
             p1.terminate()
             p1.wait()
+
+    def test_keepalive_runs_inbox_sla_driver_once(self):
+        self._participants([
+            {"name": "Claude", "last_seen": self._stamp(), "departed": False},
+            {"name": "Codex", "last_seen": OLD, "departed": False}])
+        item_epoch = time.time() - 5
+        (self.collab / "collaboration.md").write_text(
+            "# Board\n\n## Claude Outbox\n\n### %s\n\nplease review SHA abc123\n\n## Liveness\n"
+            % self._stamp(item_epoch))
+        (self.collab / "inbox_ack.json").write_text(json.dumps(
+            {"esc:Codex<- Claude": {"watch_since": item_epoch - 1}}))
+
+        p = self._start_keepalive(env={"BRIDGE_INBOX_SLA": "1"})
+        try:
+            self._wait_for(lambda: "Inbox SLA" in self._board(),
+                           "keepalive should periodically run inbox SLA escalation")
+            signal = json.loads((self.collab / "collaboration_signal.json").read_text())
+            first_update = signal["update_id"]
+            time.sleep(0.6)
+            signal = json.loads((self.collab / "collaboration_signal.json").read_text())
+            self.assertEqual(first_update, signal["update_id"],
+                             "SLA driver must rely on idempotent escalation, not spam")
+        finally:
+            self._stop(p)
+
+    def test_keepalive_runs_peer_departure_driver_once(self):
+        self._participants([
+            {"name": "Claude", "last_seen": OLD, "departed": False},
+            {"name": "Codex", "last_seen": OLD, "departed": False}])
+
+        p = self._start_keepalive(env={"BRIDGE_PRESENCE_STALE": "1"})
+        try:
+            self._wait_for(
+                lambda: next(a for a in self._read_parts() if a["name"] == "Claude").get("departed"),
+                "keepalive should periodically run peer departure detection")
+            board = self._board()
+            self.assertIn("Departure detected", board)
+            first_count = board.count("Departure detected")
+            time.sleep(0.6)
+            self.assertEqual(first_count, self._board().count("Departure detected"),
+                             "departure driver must mark departed once, not rebroadcast")
+        finally:
+            self._stop(p)
 
 
 if __name__ == "__main__":

@@ -9,9 +9,9 @@
 # interval INDEPENDENT of board-wait — which is what lets bridge-liveness.sh use a
 # short, trustworthy present-window (distinguishing a busy window from a closed one).
 #
-# It does ONLY the heartbeat (no departure scan, no signal bump, no board write) —
-# departure detection stays board-wait's job. Single-instance per (project, self),
-# same atomic-pidfile mutex as board-wait.
+# Each cycle refreshes the heartbeat, then runs small idempotent safety drivers:
+# inbox SLA escalation and peer departure detection. Single-instance per
+# (project, self), same atomic-pidfile mutex as board-wait.
 #
 # Usage:
 #   presence-keepalive.sh --self <Me> [--project DIR] [--interval SEC]
@@ -58,9 +58,10 @@ done
 cleanup_pidfile() { [ "$(cat "$PIDFILE" 2>/dev/null || echo "")" = "$$" ] && rm -f "$PIDFILE"; }
 trap cleanup_pidfile EXIT
 
-# Heartbeat loop: refresh last_seen, then sleep. Never bumps the signal or scans for
-# departures — purely "I'm still here".
+# Driver loop: keep my last_seen fresh, then run idempotent safety checks.
 while true; do
   "$PY3" "$HERE/_presence.py" heartbeat --self "$SELF" --project "$PROJECT" 2>/dev/null || true
+  "$PY3" "$HERE/bridge-inbox.py" escalate --self "$SELF" --project "$PROJECT" >/dev/null 2>&1 || true
+  "$PY3" "$HERE/_presence.py" departures --self "$SELF" --project "$PROJECT" >/dev/null 2>&1 || true
   sleep "$INTERVAL"
 done
