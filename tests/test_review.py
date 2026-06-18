@@ -44,6 +44,11 @@ class ReviewLedgerTests(unittest.TestCase):
              "--sha", sha, "--exclude", exclude],
             capture_output=True, text=True, timeout=20)
 
+    def _git(self, *args):
+        return subprocess.run(
+            ["git", "-C", self.tmp, *args],
+            capture_output=True, text=True, timeout=20, check=True)
+
     def test_peer_ship_approves_the_sha(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "SHIP")
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
@@ -64,6 +69,24 @@ class ReviewLedgerTests(unittest.TestCase):
     def test_go_verdict_also_approves(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "GO")
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
+
+    def test_recording_short_sha_canonicalizes_to_full_git_sha(self):
+        self._git("init", "-q")
+        self._git("config", "user.email", "codex@example.test")
+        self._git("config", "user.name", "Codex")
+        (pathlib.Path(self.tmp) / "work.txt").write_text("reviewed\n")
+        self._git("add", "work.txt")
+        self._git("commit", "-q", "-m", "reviewed")
+        full_sha = self._git("rev-parse", "HEAD").stdout.strip()
+        short_sha = self._git("rev-parse", "--short=7", "HEAD").stdout.strip()
+
+        r = self._record("--self", "Codex", "--sha", short_sha, "--verdict", "SHIP")
+        led = json.loads((self.collab / "collaboration_reviews.json").read_text())
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotEqual(short_sha, full_sha)
+        self.assertEqual(led["reviews"][0]["sha"], full_sha)
+        self.assertEqual(self._check(full_sha, "Claude").returncode, 0)
 
     def test_bypass_entry_is_not_an_approval(self):
         self._record("--self", "Claude", "--sha", "abc123", "--verdict", "BYPASS",

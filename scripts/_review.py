@@ -20,6 +20,7 @@ CLI:
 """
 import argparse
 import os
+import subprocess
 import sys
 import time
 
@@ -46,6 +47,21 @@ def _detected_recorder(self_name, env=None):
     return self_name
 
 
+def _canonical_sha(project, sha):
+    """Return git's full commit id for a rev when possible; otherwise keep it raw."""
+    try:
+        resolved = subprocess.run(
+            ["git", "-C", project, "rev-parse", "--verify", "--quiet",
+             "--end-of-options", "%s^{commit}" % sha],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return sha
+    if resolved.returncode != 0:
+        return sha
+    full_sha = resolved.stdout.strip()
+    return full_sha or sha
+
+
 def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False,
            wait=10.0):
     """Append a review entry under the collaboration lock.
@@ -56,7 +72,8 @@ def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False
     if recorded_by != reviewer:
         return "actor_mismatch"
     p = collab_paths(project)
-    entry = {"reviewer": reviewer, "sha": sha, "verdict": (verdict or "").upper(),
+    entry = {"reviewer": reviewer, "sha": _canonical_sha(project, sha),
+             "verdict": (verdict or "").upper(),
              "target": target, "note": note, "bypass": bool(bypass),
              "recorded_by": recorded_by, "ts": now_str(), "nonce": _nonce()}
     if not acquire_lock(p["lock"], "review-%s" % reviewer, ttl=30, wait=wait):
