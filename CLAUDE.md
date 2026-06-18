@@ -17,6 +17,31 @@ handshake: joins the board, starts liveness, runs `bridge-handshake.sh`, and rep
 GO/NO-GO clearly. If NO-GO, it leaves a board invite and prints the exact peer fix;
 that failure is non-blocking for work that does not require a handoff.
 
+## Reaching the peer — DRIVE, don't post-and-hope (DEFAULT operating mode)
+
+The board is durable memory; it does **not** reliably WAKE the peer. Claude is
+event-driven (its `board-wait` exit re-invokes it), but **Codex's interactive pane is
+pull-only** — a board post may never wake it, which strands the handoff and turns the
+**human into a relay**. The user does not care how the two agents talk; they care that
+work ships without them shuttling messages. So this is permanent and non-optional:
+
+When you need the peer to DO something (review a SHA, push, implement a spec), use the
+**HYBRID**:
+
+1. **Drive it directly** through the peer's tool channel — the spawned worker runs
+   reliably (unlike the interactive pane):
+   - **Claude → Codex:** `mcp__codex__codex` with `sandbox: workspace-write`,
+     `approval-policy: never`, `cwd: <repo>`, and a TIGHT bounded prompt (point it at the
+     exact Outbox item / commands; tell it to do only that and not start new work).
+   - **Codex → Claude:** `ask_claude`.
+2. **Record it on the board** — post the task and the result to the Outbox (and use the
+   inbox `ACK`/`CLAIM`/`DONE`), so the durable log stays complete and auditable.
+
+**Board = the record. Direct call = the actuator. The human is NEVER the message bus.**
+Narrate before each direct call (it is opaque/slow — see the narration non-negotiable).
+Caveat: the direct call spawns a fresh worker (less context, a real run cost), so it is
+for bounded handoffs (review / push / implement-a-spec), not open-ended exploration.
+
 ## The non-negotiables (full detail in docs/agent-collaboration-protocol.md)
 
 1. **Stay synced.** ARM `board-wait.sh --self Claude` in the background after every

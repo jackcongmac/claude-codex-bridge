@@ -20,6 +20,29 @@ performs the proactive handshake: it joins the board, starts liveness, runs
 invite and prints the exact peer fix; that failure is non-blocking for work that
 does not require a handoff.
 
+## Reaching the peer — DRIVE, don't post-and-hope (DEFAULT operating mode)
+
+The board is durable memory; it does **not** reliably WAKE the peer. A board post may
+never wake the peer's interactive pane (Codex's pane is pull-only — it advances on user
+input or its own polling, not on a background board event), which strands the handoff and
+turns the **human into a relay**. The user does not care how the two agents talk; they
+care that work ships without them shuttling messages. So this is permanent and non-optional:
+
+When you need the peer to DO something (review a SHA, push, implement a spec), use the
+**HYBRID**:
+
+1. **Drive it directly** through the peer's tool channel — the spawned worker runs
+   reliably (unlike the interactive pane):
+   - **Codex → Claude:** `ask_claude` (the `claude_chat` MCP) with a TIGHT bounded prompt.
+   - **Claude → Codex:** `mcp__codex__codex` with `sandbox: workspace-write`,
+     `approval-policy: never`, `cwd: <repo>`.
+2. **Record it on the board** — post the task and the result to the Outbox (and use the
+   inbox `ACK`/`CLAIM`/`DONE`), so the durable log stays complete and auditable.
+
+**Board = the record. Direct call = the actuator. The human is NEVER the message bus.**
+Narrate before each direct call (it is opaque/slow). The direct call spawns a fresh worker
+(less context, a real run cost), so it is for bounded handoffs, not open-ended work.
+
 ## The non-negotiables (full detail in docs/agent-collaboration-protocol.md)
 
 1. **Stay synced.** ARM `board-wait.sh --self <You>` in the background after every
