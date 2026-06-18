@@ -8,6 +8,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "bridge-status.py"
+SCRIPTS = REPO_ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+import bridge_inbox  # noqa: E402
 
 
 def write_json(path, payload):
@@ -15,13 +18,22 @@ def write_json(path, payload):
 
 
 class BridgeStatusCliTests(unittest.TestCase):
-    def run_status(self, project):
+    def run_status(self, project, *extra_args):
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--project", str(project)],
+            [sys.executable, str(SCRIPT), "--project", str(project), *extra_args],
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
             check=False,
+        )
+
+    def run_git(self, project, *args):
+        return subprocess.run(
+            ["git", *args],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
         )
 
     def test_shows_state_signal_and_recent_events(self):
@@ -196,6 +208,86 @@ class BridgeStatusCliTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Inbox Codex: ACTION_REQUIRED 1 pending from Claude Outbox", result.stdout)
+
+    def test_delivery_dashboard_shows_lifecycle_states_from_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            collab = project / ".collab"
+            collab.mkdir()
+
+            self.run_git(project, "init", "-q")
+            self.run_git(project, "config", "user.email", "test@example.com")
+            self.run_git(project, "config", "user.name", "Test User")
+            (project / "work.txt").write_text("shipped\n", encoding="utf-8")
+            self.run_git(project, "add", "work.txt")
+            self.run_git(project, "commit", "-q", "-m", "shipped commit")
+            shipped_sha = self.run_git(project, "rev-parse", "HEAD").stdout.strip()
+            self.run_git(project, "update-ref", "refs/remotes/origin/main", shipped_sha)
+            (project / "work.txt").write_text("reviewed\n", encoding="utf-8")
+            self.run_git(project, "commit", "-am", "reviewed commit", "-q")
+            reviewed_sha = self.run_git(project, "rev-parse", "HEAD").stdout.strip()
+
+            (collab / "collaboration.md").write_text(
+                "# Board\n\n"
+                "## Claude Outbox\n\n"
+                "### 2026-06-17 10:05:00 PDT\n\n"
+                "Open delivery item without a receipt.\n\n"
+                "### 2026-06-17 10:00:00 PDT\n\n"
+                "Claimed delivery item with a receipt.\n\n"
+                "## Codex Outbox\n\n"
+                "### 2026-06-17 10:20:00 PDT\n\n"
+                "Overdue delivery item waiting on Claude.\n\n"
+                "### 2026-06-17 10:10:00 PDT\n\n"
+                f"Reviewed delivery item for {reviewed_sha}.\n\n"
+                "### 2026-06-17 09:55:00 PDT\n\n"
+                f"Shipped delivery item for {shipped_sha}.\n\n",
+                encoding="utf-8",
+            )
+
+            claude_outbox = bridge_inbox.load_entries(str(project), "Codex", "Claude")
+            codex_outbox = bridge_inbox.load_entries(str(project), "Claude", "Codex")
+            write_json(
+                collab / "inbox_ack.json",
+                {
+                    "Codex<- Claude": {
+                        "last_digest": claude_outbox[0]["digest"],
+                        "last_index": claude_outbox[0]["index"],
+                        "status": "CLAIM",
+                    },
+                    "esc:Claude<- Codex": {
+                        "watch_since": 0,
+                        "last_escalated_digest": codex_outbox[-1]["digest"],
+                    },
+                },
+            )
+            write_json(
+                collab / "collaboration_reviews.json",
+                {
+                    "reviews": [
+                        {
+                            "reviewer": "Claude",
+                            "sha": reviewed_sha,
+                            "verdict": "REVISE",
+                        },
+                        {
+                            "reviewer": "Claude",
+                            "sha": shipped_sha,
+                            "verdict": "SHIP",
+                        },
+                    ]
+                },
+            )
+
+            result = self.run_status(project, "--delivery")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Delivery Dashboard", result.stdout)
+            self.assertIn("Work items: 5", result.stdout)
+            self.assertRegex(result.stdout, r"open\s+Claude #2 .*Open delivery item")
+            self.assertRegex(result.stdout, r"claimed\s+Claude #1 .*Claimed delivery item")
+            self.assertRegex(result.stdout, r"reviewed\s+Codex #2 .*REVISE .*Reviewed delivery item")
+            self.assertRegex(result.stdout, r"shipped\s+Codex #1 .*SHIP .*Shipped delivery item")
+            self.assertRegex(result.stdout, r"overdue\s+Codex #3 .*Overdue delivery item")
 
 
 if __name__ == "__main__":
