@@ -3,11 +3,15 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from datetime import datetime
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+import bridge_inbox  # noqa: E402
 
 
 class BridgeInboxTests(unittest.TestCase):
@@ -118,6 +122,65 @@ class BridgeInboxTests(unittest.TestCase):
         pending = self._inbox("pending", "--self", "codex-exec-1")
         self.assertEqual(pending.returncode, 2)
         self.assertIn("--peer is required", pending.stderr)
+
+
+class InboxSlaEscalationTests(unittest.TestCase):
+    """The silent-peer safety net (platform diagnosis 2026-06-17, spec item C): if an
+    item sits in my inbox unacked past an SLA, escalate ONCE to ## Liveness so a human is
+    pulled in — instead of the peer being silent for hours with nobody noticing. Cold-start
+    backlog (items posted before we started watching) is never escalated; escalate-only,
+    no auto-assign."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.collab = pathlib.Path(self.tmp) / ".collab"
+        self.collab.mkdir()
+        (self.collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+
+    def _ts(self, epoch):
+        return time.strftime("%Y-%m-%d %H:%M:%S PDT", time.localtime(epoch))
+
+    def _set_codex_outbox(self, items):  # items: list of (epoch, body)
+        blocks = ["### %s\n\n%s\n" % (self._ts(e), b) for e, b in items]
+        body = "# Board\n\n## Codex Outbox\n\n" + "\n".join(reversed(blocks)) + "\n"
+        (self.collab / "collaboration.md").write_text(body)
+
+    def _board(self):
+        return (self.collab / "collaboration.md").read_text()
+
+    def _uid(self):
+        return json.loads((self.collab / "collaboration_signal.json").read_text())["update_id"]
+
+    def test_cold_start_baselines_and_does_not_escalate_backlog(self):
+        t0 = 1_000_000
+        self._set_codex_outbox([(t0 - 5000, "ancient ACTION_REQUEST")])
+        status, _ = bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0)
+        self.assertEqual(status, "baselined")
+        self.assertNotIn("## Liveness", self._board())
+        self.assertEqual(self._uid(), 0)
+
+    def test_new_item_unacked_past_sla_escalates_once(self):
+        t0 = 1_000_000
+        self._set_codex_outbox([])
+        bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0)  # baseline at t0
+        self._set_codex_outbox([(t0 + 10, "please review SHA abc123")])
+        status, info = bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0 + 700)
+        self.assertEqual(status, "escalated")
+        self.assertIn("## Liveness", self._board())
+        self.assertEqual(self._uid(), 1, "escalation must bump the signal once")
+        # idempotent: same unchanged state must not re-escalate
+        status2, _ = bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0 + 800)
+        self.assertEqual(status2, "already-escalated")
+        self.assertEqual(self._uid(), 1, "must not double-escalate the same item")
+
+    def test_ack_clears_pending_so_no_escalation(self):
+        t0 = 1_000_000
+        self._set_codex_outbox([])
+        bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0)
+        self._set_codex_outbox([(t0 + 10, "please review SHA abc123")])
+        bridge_inbox.ack(self.tmp, "Claude", "CLAIM")
+        status, _ = bridge_inbox.escalate(self.tmp, "Claude", sla_seconds=600, now=t0 + 700)
+        self.assertEqual(status, "clear")
 
 
 if __name__ == "__main__":

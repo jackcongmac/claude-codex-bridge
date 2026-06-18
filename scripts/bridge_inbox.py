@@ -13,6 +13,8 @@ import json
 import os
 import re
 import sys
+import time
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_common as bc  # noqa: E402
@@ -200,6 +202,76 @@ def ack(project, self_name, status_name, note="", peer_name=None, wait=10.0):
         bc.release_lock(paths["lock"], run_id)
 
 
+def _parse_epoch(timestamp):
+    try:
+        base = (timestamp or "").rsplit(" ", 1)[0]   # drop trailing TZ token
+        return time.mktime(datetime.strptime(base, "%Y-%m-%d %H:%M:%S").timetuple())
+    except Exception:
+        return None
+
+
+def escalate(project, self_name, sla_seconds=600, now=None, peer_name=None, wait=10.0):
+    """Silent-peer safety net (spec item C): if a pending inbox item has sat unacked past
+    sla_seconds, post ONE escalation to ## Liveness so a human is pulled in instead of the
+    peer going dark for hours unnoticed. Cold-start backlog (items posted before we first
+    watched) is never escalated; escalation is idempotent per item digest. Escalate-only —
+    never auto-assigns or auto-SHIPs. Returns (status, info)."""
+    if now is None:
+        now = time.time()
+    peer_name = peer_for(self_name, peer_name)
+    paths = bc.collab_paths(project)
+    run_id = "inbox-escalate-%s" % self_name
+    if not bc.acquire_lock(paths["lock"], run_id, ttl=30, wait=wait):
+        return "lockbusy", None
+    try:
+        entries = load_entries(project, self_name, peer_name)
+        state = load_state(paths)
+        ack = get_ack(state, self_name, peer_name)
+        pending = pending_entries(entries, ack)
+        esc_key = "esc:%s" % state_key(self_name, peer_name)
+        esc = state.get(esc_key, {})
+        # First observation establishes the watch baseline — never escalate the historical
+        # backlog that predates us starting to watch.
+        if "watch_since" not in esc:
+            esc["watch_since"] = now
+            state[esc_key] = esc
+            bc.atomic_write_json(paths["inbox_ack"], state)
+            return "baselined", {"watch_since": now}
+        watch_since = esc["watch_since"]
+        overdue = []
+        for e in pending:
+            ts = _parse_epoch(e["timestamp"])
+            if ts is not None and ts >= watch_since and (now - ts) > sla_seconds:
+                overdue.append(e)
+        if not overdue:
+            if esc.get("last_escalated_digest"):   # caught up -> allow a future item to re-fire
+                esc.pop("last_escalated_digest", None)
+                state[esc_key] = esc
+                bc.atomic_write_json(paths["inbox_ack"], state)
+            return "clear", {"pending": len(pending)}
+        newest = overdue[-1]["digest"]
+        if esc.get("last_escalated_digest") == newest:
+            return "already-escalated", {"digest": newest}
+        mins = int(sla_seconds // 60)
+        note = ("**Inbox SLA**: %s has %d item(s) from %s Outbox unacked for >%dmin — peer "
+                "may be silent/offline; needs human attention or a backup reviewer (never an "
+                "auto-SHIP). Latest #%s `%s`."
+                % (self_name, len(overdue), peer_name, mins, overdue[-1]["index"], newest))
+        bc._append_under_header(paths["board"], "## Liveness", note)
+        prev = int((bc.read_json(paths["signal"], default={}) or {}).get("update_id", 0))
+        bc.atomic_write_json(paths["signal"], {
+            "update_id": prev + 1, "updated_at": bc.now_str(), "updated_by": self_name,
+            "changed_section": "Liveness",
+            "summary": "Inbox SLA: %s %d item(s) from %s unacked >%dmin"
+                       % (self_name, len(overdue), peer_name, mins)})
+        esc["last_escalated_digest"] = newest
+        state[esc_key] = esc
+        bc.atomic_write_json(paths["inbox_ack"], state)
+        return "escalated", {"count": len(overdue), "digest": newest}
+    finally:
+        bc.release_lock(paths["lock"], run_id)
+
+
 def cmd_pending(args):
     project = bc.find_project_root(args.project)
     info = status(project, args.self_name, args.peer)
@@ -242,7 +314,21 @@ def build_parser():
     ack_p.add_argument("--note", default="")
     ack_p.add_argument("--wait", type=float, default=10.0)
     ack_p.set_defaults(func=cmd_ack)
+
+    esc = sub.add_parser("escalate", help="Escalate inbox items unacked past the SLA to ## Liveness.")
+    esc.add_argument("--self", dest="self_name", required=True)
+    esc.add_argument("--peer")
+    esc.add_argument("--project", default=os.getcwd())
+    esc.add_argument("--sla", type=float, default=float(os.environ.get("BRIDGE_INBOX_SLA", "600")))
+    esc.set_defaults(func=cmd_escalate)
     return parser
+
+
+def cmd_escalate(args):
+    project = bc.find_project_root(args.project)
+    status_str, info = escalate(project, args.self_name, sla_seconds=args.sla, peer_name=args.peer)
+    print("Inbox escalate: %s %s" % (status_str, info or ""))
+    return 0
 
 
 def main(argv=None):
