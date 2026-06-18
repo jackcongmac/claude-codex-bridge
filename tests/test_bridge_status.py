@@ -229,6 +229,8 @@ class BridgeStatusCliTests(unittest.TestCase):
 
             (collab / "collaboration.md").write_text(
                 "# Board\n\n"
+                "## Roles\n\n"
+                "Codex is the executor; this section is board metadata, not delivery work.\n\n"
                 "## Claude Outbox\n\n"
                 "### 2026-06-17 10:05:00 PDT\n\n"
                 "Open delivery item without a receipt.\n\n"
@@ -240,7 +242,9 @@ class BridgeStatusCliTests(unittest.TestCase):
                 "### 2026-06-17 10:10:00 PDT\n\n"
                 f"Reviewed delivery item for {reviewed_sha}.\n\n"
                 "### 2026-06-17 09:55:00 PDT\n\n"
-                f"Shipped delivery item for {shipped_sha}.\n\n",
+                f"Shipped delivery item for {shipped_sha}.\n\n"
+                "### 2026-06-17 09:50:00 PDT\n\n"
+                "Stale historical open item superseded by later shipped work.\n\n",
                 encoding="utf-8",
             )
 
@@ -281,13 +285,33 @@ class BridgeStatusCliTests(unittest.TestCase):
             result = self.run_status(project, "--delivery")
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "Delivery: 1 open · 1 claimed · 1 overdue · 1 reviewed-unshipped · 1 shipped",
+                result.stdout,
+            )
             self.assertIn("Delivery Dashboard", result.stdout)
-            self.assertIn("Work items: 5", result.stdout)
+            self.assertIn("Work items: 4 actionable (6 total)", result.stdout)
             self.assertRegex(result.stdout, r"open\s+Claude #2 .*Open delivery item")
             self.assertRegex(result.stdout, r"claimed\s+Claude #1 .*Claimed delivery item")
-            self.assertRegex(result.stdout, r"reviewed\s+Codex #2 .*REVISE .*Reviewed delivery item")
-            self.assertRegex(result.stdout, r"shipped\s+Codex #1 .*SHIP .*Shipped delivery item")
-            self.assertRegex(result.stdout, r"overdue\s+Codex #3 .*Overdue delivery item")
+            self.assertRegex(result.stdout, r"reviewed\s+Codex #3 .*REVISE .*Reviewed delivery item")
+            self.assertRegex(result.stdout, r"overdue\s+Codex #4 .*Overdue delivery item")
+            self.assertNotIn("Roles", result.stdout)
+            self.assertNotIn("Shipped delivery item", result.stdout)
+            self.assertNotIn("Stale historical open item", result.stdout)
+
+            all_result = self.run_status(project, "--delivery", "--all")
+
+            self.assertEqual(all_result.returncode, 0, all_result.stderr)
+            self.assertIn(
+                "Delivery: 2 open · 1 claimed · 1 overdue · 1 reviewed-unshipped · 1 shipped",
+                all_result.stdout,
+            )
+            self.assertIn("Work items: 6", all_result.stdout)
+            self.assertRegex(
+                all_result.stdout,
+                r"shipped\s+Codex #2 .*SHIP .*Shipped delivery item",
+            )
+            self.assertIn("Stale historical open item", all_result.stdout)
 
 
 if __name__ == "__main__":

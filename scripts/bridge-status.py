@@ -2,6 +2,7 @@
 """Read-only resource and safety dashboard for claude-codex-bridge."""
 
 import argparse
+from collections import Counter
 import json
 import os
 import re
@@ -147,7 +148,7 @@ def read_outbox_sections(board_path):
     text, error = read_text(board_path)
     if error:
         return [], error
-    pattern = re.compile(r"(?ms)^##[ \t]+(.+?) Outbox[ \t]*\n(.*?)(?=^##[ \t]+|\Z)")
+    pattern = re.compile(r"(?ms)^##[ \t]+([^\n]+?) Outbox[ \t]*\n(.*?)(?=^##[ \t]+|\Z)")
     return [(match.group(1).strip(), match.group(0)) for match in pattern.finditer(text)], None
 
 
@@ -301,7 +302,50 @@ def format_delivery_item(item):
     )
 
 
-def build_delivery_dashboard(project):
+def format_delivery_summary(items):
+    counts = Counter(item["state"] for item in items)
+    return (
+        f"Delivery: {counts['open']} open · {counts['claimed']} claimed · "
+        f"{counts['overdue']} overdue · {counts['reviewed']} reviewed-unshipped · "
+        f"{counts['shipped']} shipped"
+    )
+
+
+def is_latest_ack_item(item):
+    ack = item["ack"]
+    if not ack:
+        return False
+    return ack.get("last_digest") == item["digest"] or ack.get("last_index") == item["index"]
+
+
+def current_actionable_items(items):
+    floor_by_actor = {}
+    for item in items:
+        if item["state"] == "shipped" or is_latest_ack_item(item):
+            floor_by_actor[item["actor"]] = max(
+                floor_by_actor.get(item["actor"], 0),
+                item["index"],
+            )
+
+    visible = []
+    for item in items:
+        if item["state"] == "shipped":
+            continue
+        if item["state"] in {"overdue", "reviewed"}:
+            visible.append(item)
+            continue
+        if item["index"] >= floor_by_actor.get(item["actor"], 0):
+            visible.append(item)
+    return visible
+
+
+def format_default_delivery_summary(visible_items, all_items):
+    return format_delivery_summary(
+        visible_items + [item for item in all_items if item["state"] == "shipped"]
+    )
+
+
+def build_delivery_dashboard(project, include_all=False):
     root = bc.find_project_root(str(project)) if project else bc.find_project_root()
     paths = bc.collab_paths(root)
     sections, board_error = read_outbox_sections(Path(paths["board"]))
@@ -326,14 +370,23 @@ def build_delivery_dashboard(project):
                 classify_delivery_item(root, actor, entries, entry, ack_state, reviews, shipped_cache)
             )
 
+    visible_items = items if include_all else current_actionable_items(items)
+    if include_all:
+        work_items = f"Work items: {len(visible_items)}"
+        summary = format_delivery_summary(items)
+    else:
+        work_items = f"Work items: {len(visible_items)} actionable ({len(items)} total)"
+        summary = format_default_delivery_summary(visible_items, items)
+
     lines = [
+        summary,
         "Delivery Dashboard",
         f"Project: {root}  (.collab: {paths['dir']})",
-        f"Work items: {len(items)}",
+        work_items,
     ]
-    if items:
+    if visible_items:
         lines.append("State     Work item")
-        lines.extend(format_delivery_item(item) for item in items)
+        lines.extend(format_delivery_item(item) for item in visible_items)
     else:
         lines.append("State     Work item")
         lines.append("  none")
@@ -400,8 +453,12 @@ def build_dashboard(project):
     return "\n".join(lines) + "\n", "", 0
 
 
-def print_once(project, delivery=False):
-    output, error, code = build_delivery_dashboard(project) if delivery else build_dashboard(project)
+def print_once(project, delivery=False, include_all=False):
+    output, error, code = (
+        build_delivery_dashboard(project, include_all=include_all)
+        if delivery
+        else build_dashboard(project)
+    )
     if output:
         sys.stdout.write(output)
     if error:
@@ -409,10 +466,10 @@ def print_once(project, delivery=False):
     return code
 
 
-def watch(project, interval, delivery=False):
+def watch(project, interval, delivery=False, include_all=False):
     try:
         while True:
-            code = print_once(project, delivery=delivery)
+            code = print_once(project, delivery=delivery, include_all=include_all)
             sys.stdout.flush()
             if code != 0:
                 return code
@@ -441,6 +498,11 @@ def parse_args(argv):
         help="Show the read-only delivery lifecycle dashboard instead of the resource dashboard.",
     )
     parser.add_argument(
+        "--all",
+        action="store_true",
+        help="With --delivery, include shipped items in the work-item list.",
+    )
+    parser.add_argument(
         "--interval",
         type=float,
         default=2.0,
@@ -455,8 +517,8 @@ def main(argv=None):
         sys.stderr.write("--interval must be greater than zero\n")
         return 2
     if args.watch:
-        return watch(args.project, args.interval, delivery=args.delivery)
-    return print_once(args.project, delivery=args.delivery)
+        return watch(args.project, args.interval, delivery=args.delivery, include_all=args.all)
+    return print_once(args.project, delivery=args.delivery, include_all=args.all)
 
 
 if __name__ == "__main__":
