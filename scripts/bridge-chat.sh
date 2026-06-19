@@ -8,6 +8,7 @@
 #
 # Usage:
 #   bridge-chat.sh --self <Me> --message "…"    # post a line to the chat
+#   bridge-chat.sh --self <Me> --message "…" --worker
 #   bridge-chat.sh                              # print the thread once
 #   bridge-chat.sh --watch [--interval N]       # live-tail the thread
 #   bridge-chat.sh --self <Me> --interactive    # terminal chat; Esc exits
@@ -16,13 +17,14 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/bridge-paths.sh"
 
-SELF=""; PROJECT="$PWD"; MESSAGE=""; WATCH=0; INTERACTIVE=0; NO_RESPONDERS=0
+SELF=""; PROJECT="$PWD"; MESSAGE=""; WATCH=0; INTERACTIVE=0; NO_RESPONDERS=0; WORKER=0
 INTERVAL="${BRIDGE_CHAT_INTERVAL:-2}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
     --project) PROJECT="$2"; shift 2;;
     --message) MESSAGE="$2"; shift 2;;
+    --worker) WORKER=1; shift;;
     --watch) WATCH=1; shift;;
     --interactive) INTERACTIVE=1; shift;;
     --no-responders) NO_RESPONDERS=1; shift;;
@@ -47,7 +49,21 @@ fi
 # section, prefixed with the speaker so the thread reads like a chat.
 if [ -n "$MESSAGE" ]; then
   [ -n "$SELF" ] || { echo "[x] --self <Me> required to post" >&2; exit 2; }
-  FORMATTED="$(_HERE="$HERE" _SELF="$SELF" _MESSAGE="$MESSAGE" "$PY3" - <<'PY'
+  SPEAKER="$SELF"
+  if [ "$WORKER" = "1" ]; then
+    SPEAKER="$(_HERE="$HERE" _SELF="$SELF" "$PY3" - <<'PY'
+import importlib.util
+import os
+
+path = os.path.join(os.environ["_HERE"], "bridge-chat-web.py")
+spec = importlib.util.spec_from_file_location("chatweb", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(mod.worker_speaker_label(os.environ["_SELF"]), end="")
+PY
+)"
+  fi
+  FORMATTED="$(_HERE="$HERE" _SELF="$SPEAKER" _MESSAGE="$MESSAGE" "$PY3" - <<'PY'
 import importlib.util
 import os
 
@@ -59,7 +75,7 @@ print(mod.format_chat_message(os.environ["_SELF"], os.environ["_MESSAGE"]), end=
 PY
 )"
   exec "$HERE/bridge-post.sh" --self "$SELF" --project "$PROJECT" --section "Chat" \
-    --message "$FORMATTED" --summary "chat: $SELF: $MESSAGE"
+    --message "$FORMATTED" --summary "chat: $SPEAKER: $MESSAGE"
 fi
 
 print_chat() {

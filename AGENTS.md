@@ -39,6 +39,8 @@ When you need the peer to DO something (review a SHA, push, implement a spec), u
 2. **Record it on the board** — post the task and the result to the Outbox (and use the
    inbox `ACK`/`CLAIM`/`DONE`), so the durable log stays complete and auditable.
 
+Worker attribution: a driven worker's board posts should use `--worker` so they're attributable, never impersonating the persistent agent.
+
 **Board = the record. Direct call = the actuator. The human is NEVER the message bus.**
 Narrate before each direct call (it is opaque/slow). The direct call spawns a fresh worker
 (less context, a real run cost), so it is for bounded handoffs, not open-ended work.

@@ -40,6 +40,17 @@ class BridgeChatTests(unittest.TestCase):
         self.assertIn("## Chat", board)
         self.assertIn("**Jack:** hello team", board)
 
+    def test_worker_post_appears_with_nonce_speaker(self):
+        plain = self._chat("--self", "Codex", "--message", "plain update")
+        worker = self._chat("--self", "Codex", "--message", "worker update", "--worker")
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(worker.returncode, 0, worker.stderr)
+        board = self._board()
+        self.assertIn("**Codex:** plain update", board)
+        self.assertRegex(board, r"\*\*Codex \(worker [0-9a-f]{4,6}\):\*\* worker update")
+        self.assertNotIn("## Codex (worker", board)
+
     def test_post_bumps_signal_with_chat_section(self):
         self._chat("--self", "Claude", "--message", "hi")
         sig = json.loads((self.collab / "collaboration_signal.json").read_text())

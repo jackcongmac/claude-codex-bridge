@@ -34,11 +34,21 @@ _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', r
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
 _BOARD_SECTION_LINE = re.compile(r'(?m)^(##)(?=\s|$)')
 _CHAT_ID = re.compile(r'^<!--\s*chat-id:([A-Za-z0-9_.:-]+)\s*-->\s*', re.S)
+_WORKER_SPEAKER = re.compile(r'^(?P<base>.+?) \(worker (?P<nonce>[0-9a-f]{4,6})\)$')
 
 
 def sanitize_chat_text(text):
     """Escape board section headers inside a chat body before writing Markdown."""
     return _BOARD_SECTION_LINE.sub(r'\\##', text or "")
+
+
+def worker_speaker_label(speaker, nonce=None):
+    return "%s (worker %s)" % (speaker, nonce or secrets.token_hex(3))
+
+
+def parse_worker_speaker(speaker):
+    m = _WORKER_SPEAKER.match(speaker or "")
+    return (m.group("base"), m.group("nonce")) if m else None
 
 
 def format_chat_message(speaker, text, msg_id=None):
@@ -64,6 +74,9 @@ def parse_chat(section):
         sm = _SPEAKER.match(body)
         speaker, text = (sm.group(1).strip(), sm.group(2).strip()) if sm else ("?", body)
         msg = {"ts": m.group(1).strip(), "speaker": speaker, "text": text}
+        worker = parse_worker_speaker(speaker)
+        if worker:
+            msg["speaker_base"], msg["worker_nonce"] = worker
         if msg_id:
             msg["_id"] = msg_id
         msgs.append(msg)

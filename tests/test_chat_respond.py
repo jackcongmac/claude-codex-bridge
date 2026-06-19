@@ -80,6 +80,12 @@ class RespondOnceTests(unittest.TestCase):
         self._set_chat([("Jack", "@Codex go"), ("Codex", "我先看看代码")])
         self.assertEqual(self._run("Claude"), "not-addressed")
 
+    def test_worker_agent_chatter_without_at_does_not_compel_a_reply(self):
+        self._set_chat([("Jack", "@Codex go"), ("Codex (worker a1b2c3)", "running tests")])
+
+        self.assertEqual(self._run("Claude"), "not-addressed")
+        self.assertEqual(self._run("Codex"), "self")
+
     def test_never_responds_to_itself(self):
         self._set_chat([("Jack", "@Claude hi"), ("Claude", "already replied")])
         self.assertEqual(self._run("Claude"), "self")

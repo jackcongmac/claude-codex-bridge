@@ -41,6 +41,15 @@ format_chat_message = _cw.format_chat_message
 AGENTS = {"Claude", "Codex"}
 
 
+def _speaker_base(msg):
+    if not isinstance(msg, dict):
+        return ""
+    if msg.get("speaker_base"):
+        return msg.get("speaker_base")
+    parsed = _cw.parse_worker_speaker(msg.get("speaker", ""))
+    return parsed[0] if parsed else msg.get("speaker", "")
+
+
 def _chat_section_text(text):
     m = re.search(r'(?m)^## Chat[ \t]*$', text)
     if not m:
@@ -193,19 +202,19 @@ def _targets(msg):
       ping-pong forever on plain chatter (you watch them; they @ you when they want you).
     """
     who = mentions(msg.get("text", ""))
-    if not who and msg.get("speaker") not in AGENTS:
+    if not who and _speaker_base(msg) not in AGENTS:
         return set(AGENTS)
     return who
 
 
 def _self_spoke_after(msgs, idx, self_name):
-    return any(m["speaker"] == self_name for m in msgs[idx + 1:])
+    return any(_speaker_base(m) == self_name for m in msgs[idx + 1:])
 
 
 def _select_pending_prompt(msgs, self_name, handled):
     infer_handled_from_board = not handled
     for idx, msg in enumerate(msgs):
-        if msg["speaker"] == self_name:
+        if _speaker_base(msg) == self_name:
             continue
         if _message_id(msg) in handled:
             continue
@@ -229,18 +238,18 @@ def _select_prompt(msgs, self_name, handled=None):
     if pending is not None:
         return pending, None
     latest = msgs[-1]
-    if latest["speaker"] == self_name:
+    if _speaker_base(latest) == self_name:
         return None, "self"
     if self_name in _targets(latest) and _message_id(latest) not in handled:
         return latest, None
-    if latest["speaker"] not in AGENTS or _targets(latest):
+    if _speaker_base(latest) not in AGENTS or _targets(latest):
         return None, "not-addressed"
 
     spoke_after = False
     for msg in reversed(msgs[:-1]):
-        if msg["speaker"] == self_name:
+        if _speaker_base(msg) == self_name:
             spoke_after = True
-        if msg["speaker"] in AGENTS and not _targets(msg):
+        if _speaker_base(msg) in AGENTS and not _targets(msg):
             continue
         if self_name in _targets(msg) and not spoke_after and _message_id(msg) not in handled:
             return msg, None
@@ -322,7 +331,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         return status
     streak = 0                                  # consecutive trailing agent messages
     for m in reversed(msgs):
-        if m["speaker"] in AGENTS:
+        if _speaker_base(m) in AGENTS:
             streak += 1
         else:
             break
@@ -352,7 +361,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         # newer message is a fresh prompt addressed to ME — the loop will answer it
         # instead. If it's the other agent's parallel reply or chatter not for me, my
         # answer to the original prompt is still valid, so post it (replies may interleave).
-        return not (newest.get("speaker") != self_name and self_name in _targets(newest))
+        return not (_speaker_base(newest) != self_name and self_name in _targets(newest))
 
     st = _board_post(project, self_name, format_chat_message(self_name, reply),
                      section="Chat", guard=_guard)

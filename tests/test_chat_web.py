@@ -53,6 +53,19 @@ class ParseChatTests(unittest.TestCase):
         self.assertEqual(msgs[0]["_id"], "m1")
         self.assertEqual(msgs[0]["text"], "hello")
 
+    def test_parse_chat_preserves_worker_speaker_and_nonce(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            "<!-- chat-id:m1 -->\n**Codex (worker a1b2c3):** ran tests\n")
+
+        msgs = cw.parse_chat(section)
+
+        self.assertEqual(msgs[0]["speaker"], "Codex (worker a1b2c3)")
+        self.assertEqual(msgs[0]["speaker_base"], "Codex")
+        self.assertEqual(msgs[0]["worker_nonce"], "a1b2c3")
+        self.assertEqual(msgs[0]["text"], "ran tests")
+
     def test_message_with_inner_heading_is_not_split(self):
         section = (
             "## Chat\n\n"

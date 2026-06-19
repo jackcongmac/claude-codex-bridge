@@ -8,12 +8,13 @@
 # Usage:
 #   bridge-post.sh --self <Me> --message "..." [--project DIR]
 #                  [--section "<board section>"] [--summary "..."] [--wait SEC]
+#                  [--worker]
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/bridge-paths.sh"
 
-SELF=""; PROJECT="$PWD"; MESSAGE=""; SECTION=""; SUMMARY=""; WAIT=""
+SELF=""; PROJECT="$PWD"; MESSAGE=""; SECTION=""; SUMMARY=""; WAIT=""; WORKER=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --self) SELF="$2"; shift 2;;
@@ -22,6 +23,7 @@ while [ $# -gt 0 ]; do
     --section) SECTION="$2"; shift 2;;
     --summary) SUMMARY="$2"; shift 2;;
     --wait) WAIT="$2"; shift 2;;
+    --worker) WORKER=1; shift;;
     *) echo "unknown arg: $1" >&2; exit 2;;
   esac
 done
@@ -30,6 +32,17 @@ done
 
 bridge_resolve "$PROJECT"; PROJECT="$BRIDGE_ROOT"
 PY3="$(command -v python3)"
+
+if [ "$WORKER" = "1" ]; then
+  MESSAGE="$(_SELF="$SELF" _MESSAGE="$MESSAGE" "$PY3" - <<'PY'
+import os
+import secrets
+
+speaker = "%s (worker %s)" % (os.environ["_SELF"], secrets.token_hex(3))
+print("**%s:** %s" % (speaker, os.environ["_MESSAGE"]), end="")
+PY
+)"
+fi
 
 ARGS=(post --self "$SELF" --project "$PROJECT" --message "$MESSAGE")
 [ -n "$SECTION" ] && ARGS+=(--section "$SECTION")

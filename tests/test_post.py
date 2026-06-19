@@ -9,6 +9,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 POST = SCRIPTS / "_post.py"
+BRIDGE_POST = SCRIPTS / "bridge-post.sh"
 sys.path.insert(0, str(SCRIPTS))
 import bridge_common as bc  # noqa: E402
 
@@ -29,6 +30,11 @@ class PostTransactionTests(unittest.TestCase):
     def _post(self, *args):
         return subprocess.run(
             [sys.executable, str(POST), "post", "--project", self.tmp, *args],
+            capture_output=True, text=True, timeout=20)
+
+    def _bridge_post(self, *args):
+        return subprocess.run(
+            [str(BRIDGE_POST), "--project", self.tmp, *args],
             capture_output=True, text=True, timeout=20)
 
     def _signal(self):
@@ -60,6 +66,19 @@ class PostTransactionTests(unittest.TestCase):
         self.assertEqual(s["updated_by"], "Claude")
         self.assertEqual(s["changed_section"], "Claude Outbox")
         self.assertTrue(s["updated_at"])
+
+    def test_bridge_post_worker_marks_message_without_new_outbox(self):
+        plain = self._bridge_post("--self", "Codex", "--message", "plain status")
+        worker = self._bridge_post("--self", "Codex", "--message", "worker status", "--worker")
+
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertEqual(worker.returncode, 0, worker.stderr)
+        board = self._board()
+        self.assertIn("## Codex Outbox", board)
+        self.assertIn("plain status", board)
+        self.assertNotRegex(board, r"\*\*Codex \(worker [0-9a-f]{4,6}\):\*\* plain status")
+        self.assertRegex(board, r"\*\*Codex \(worker [0-9a-f]{4,6}\):\*\* worker status")
+        self.assertNotRegex(board, r"(?m)^## Codex \(worker [0-9a-f]{4,6}\) Outbox$")
 
     def test_post_to_an_explicit_section(self):
         r = self._post("--self", "Claude", "--message", "decided X",
