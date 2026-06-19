@@ -20,9 +20,11 @@ def _stamp(epoch):
 
 
 class LivenessVerdictTests(unittest.TestCase):
-    """_liveness.py bases the verdict on PRESENCE (last_seen), not the flappy
-    board-wait pidfile — so a present agent in its re-arm gap reads PRESENT, never
-    DEAD. See DESIGN_liveness.md."""
+    """_liveness.py separates presence (last_seen) from reactivity (armed board-wait).
+
+    A fresh heartbeat alone is PRESENT, never REACTIVE, unless the board-wait
+    pidfile exists and its pid is alive.
+    """
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -46,17 +48,23 @@ class LivenessVerdictTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return {row["name"]: row for row in json.loads(r.stdout)}
 
-    def test_present_and_armed_is_LIVE(self):
+    def test_present_and_armed_is_REACTIVE(self):
         now = time.time()
         self._write_participants([{"name": "Claude", "last_seen": _stamp(now - 2)}])
         self._arm("Claude", os.getpid())  # this test process is alive
-        self.assertEqual(self._report()["Claude"]["verdict"], "LIVE")
+        row = self._report()["Claude"]
+        self.assertEqual(row["verdict"], "REACTIVE")
+        self.assertTrue(row["reactive"])
 
-    def test_present_but_not_armed_is_PRESENT_not_DEAD(self):
-        # the normal re-arm gap: fresh heartbeat, no live pidfile
+    def test_fresh_last_seen_without_armed_board_wait_is_PRESENT_not_reactive(self):
         now = time.time()
         self._write_participants([{"name": "Claude", "last_seen": _stamp(now - 3)}])
-        self.assertEqual(self._report()["Claude"]["verdict"], "PRESENT")
+        row = self._report()["Claude"]
+        self.assertEqual(row["verdict"], "PRESENT")
+        self.assertFalse(row["armed"])
+        self.assertFalse(row["reactive"])
+        self.assertNotEqual(row["verdict"], "REACTIVE")
+        self.assertIn("not armed", row["label"])
 
     def test_dead_pid_in_pidfile_is_not_armed(self):
         now = time.time()
@@ -64,6 +72,7 @@ class LivenessVerdictTests(unittest.TestCase):
         self._arm("Claude", 999999)  # almost certainly not a live pid
         row = self._report()["Claude"]
         self.assertFalse(row["armed"])
+        self.assertFalse(row["reactive"])
         self.assertEqual(row["verdict"], "PRESENT")
 
     def test_between_present_window_and_stale_is_STALE(self):
@@ -129,7 +138,8 @@ class LivenessVerdictTests(unittest.TestCase):
         row = self._report()["Codex-测试"]
 
         self.assertTrue(row["armed"])
-        self.assertEqual(row["verdict"], "LIVE")
+        self.assertTrue(row["reactive"])
+        self.assertEqual(row["verdict"], "REACTIVE")
 
     def test_public_bridge_liveness_wrapper_reports_from_nested_project(self):
         nested = pathlib.Path(self.tmp) / "docs" / "nested"
@@ -145,13 +155,32 @@ class LivenessVerdictTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         rows = {row["name"]: row for row in json.loads(r.stdout)}
         self.assertEqual(rows["Claude"]["verdict"], "PRESENT")
+        self.assertFalse(rows["Claude"]["reactive"])
+
+    def test_text_report_labels_present_as_not_armed(self):
+        now = time.time()
+        self._write_participants([
+            {"name": "Claude", "last_seen": _stamp(now - 2)},
+            {"name": "Codex", "last_seen": _stamp(now - 2)}])
+        self._arm("Codex", os.getpid())
+
+        r = subprocess.run(
+            [sys.executable, str(LV), "report", "--project", self.tmp,
+             "--present-window", "60", "--stale-after", "1800"],
+            capture_output=True, text=True)
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Claude", r.stdout)
+        self.assertIn("PRESENT (not armed", r.stdout)
+        self.assertIn("Codex", r.stdout)
+        self.assertIn("REACTIVE", r.stdout)
 
     def test_readme_documents_liveness_report(self):
         readme = (ROOT / "README.md").read_text()
 
         self.assertIn("scripts/bridge-liveness.sh", readme)
         self.assertIn("PRESENT", readme)
-        self.assertIn("LIVE", readme)
+        self.assertIn("REACTIVE", readme)
 
 
 if __name__ == "__main__":

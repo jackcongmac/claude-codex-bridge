@@ -78,7 +78,7 @@ class NotifyTransitionTests(unittest.TestCase):
         self._participants([
             {"name": "Claude", "last_seen": _stamp(now - 1)},
             {"name": "Codex", "last_seen": _stamp(now - 1), "departed": True}])
-        self._seen({"Codex": "LIVE", "Claude": "PRESENT"})
+        self._seen({"Codex": "REACTIVE", "Claude": "PRESENT"})
         self._tick()
         self.assertIn("Codex went DEPARTED", self._board())
 

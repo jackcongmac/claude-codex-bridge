@@ -2,13 +2,12 @@
 #
 # bridge-liveness.sh — at-a-glance, continuously, whether each agent is alive.
 #
-# THE fix for "我还是不确定你俩联通了没有": judging liveness by the board-wait
-# pidfile alone false-flags a present agent as DEAD whenever the listener is
-# temporarily unarmed (legacy wake-on-exit, active work, or a missed re-arm). This
-# reports a PRESENCE-based verdict (last_seen heartbeat) so a present agent reads
-# PRESENT/LIVE — never a misleading DEAD — with ARMED shown as a secondary detail.
+# THE fix for "我还是不确定你俩联通了没有": a fresh last_seen heartbeat only proves
+# presence. It does not prove the agent has an armed board-wait and can react to
+# board changes. This reports REACTIVE only when presence is fresh AND the
+# board-wait pidfile exists with a live pid.
 #
-# Verdicts: LIVE (present + armed) · PRESENT (present but not currently armed) ·
+# Verdicts: REACTIVE (present + armed) · PRESENT (present but not currently armed) ·
 #           STALE (heartbeat aging — only with an explicit short --present-window) ·
 #           DEAD (past departure threshold) · DEPARTED.
 #

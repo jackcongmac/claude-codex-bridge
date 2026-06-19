@@ -3,7 +3,7 @@
 # bridge-revive.sh — try to bring liveness back.
 #
 #   self  : re-ensure your own liveness (register + presence-keepalive) via bridge-live.
-#   --peer: if the peer isn't live, post a board nudge (locked, via bridge-post) telling
+#   --peer: if the peer is not present/reactive, post a board nudge (locked, via bridge-post) telling
 #           them how to come back, and notify the human. NO MCP spawn — a throwaway peer
 #           instance isn't the armed window; and we cannot reopen a closed window.
 #
@@ -55,7 +55,7 @@ print(next((r["verdict"] for r in rows if r.get("name") == peer), "MISSING"))
 PYEOF
 )"
   case "$PEER_VERDICT" in
-    LIVE|PRESENT)
+    REACTIVE|PRESENT)
       echo "[revive] peer $PEER looks $PEER_VERDICT — nothing to revive." ;;
     *)
       echo "[revive] peer $PEER looks $PEER_VERDICT — posting a board nudge + notifying the human."

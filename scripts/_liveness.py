@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""_liveness.py — verdict on whether each agent is alive, robust to temporarily
-unarmed board-wait listeners.
+"""_liveness.py — verdict on whether each agent can react to board changes.
 
-WHY: judging liveness by the board-wait PIDFILE alone false-flags a present agent
-as DEAD whenever the listener is temporarily unarmed (legacy wake-on-exit, active
-work, or a missed re-arm). So PRESENCE (the last_seen heartbeat) is the PRIMARY
-signal; ARMED (pidfile alive) is reported as a secondary detail only.
+WHY: a fresh presence heartbeat (last_seen) means the window/process is present,
+but it does not mean the agent is listening for board changes. Reactivity requires
+a fresh heartbeat AND an armed board-wait pidfile whose pid is alive.
 
-Verdicts (see DESIGN_liveness.md):
-  LIVE     — present (last_seen fresh) AND board-wait armed right now
-  PRESENT  — present but not currently armed (verify before handoff)
+Verdicts:
+  REACTIVE — present (last_seen fresh) AND board-wait armed right now
+  PRESENT  — present but not currently armed (re-arm or drive directly)
   STALE    — last_seen older than the present-window but younger than departure threshold
   DEAD     — last_seen older than the departure threshold
   DEPARTED — the participant carries the departed flag
@@ -33,6 +31,14 @@ from bridge_common import collab_paths, find_project_root, read_json, _pid_alive
 
 
 SAFE_AGENT_CHARS = set(string.ascii_letters + string.digits + "_.-")
+
+LABELS = {
+    "REACTIVE": "REACTIVE",
+    "PRESENT": "PRESENT (not armed - re-arm or drive)",
+    "STALE": "STALE",
+    "DEAD": "DEAD",
+    "DEPARTED": "DEPARTED",
+}
 
 
 def _age(last_seen, now):
@@ -65,7 +71,9 @@ def verdict(part, collab_dir, now, present_window, stale_after):
     name = part.get("name", "")
     armed = _armed(collab_dir, name)
     if part.get("departed"):
-        return {"name": name, "verdict": "DEPARTED", "armed": armed, "age": None}
+        v = "DEPARTED"
+        return {"name": name, "verdict": v, "label": LABELS[v],
+                "armed": armed, "reactive": False, "age": None}
     age = _age(part.get("last_seen", ""), now)
     if age is None:
         v = "STALE"                              # unparseable heartbeat: do not be optimistic
@@ -74,10 +82,12 @@ def verdict(part, collab_dir, now, present_window, stale_after):
     elif age > present_window:
         v = "STALE"
     elif armed:
-        v = "LIVE"
+        v = "REACTIVE"
     else:
         v = "PRESENT"                            # present but not currently armed
-    return {"name": name, "verdict": v, "armed": armed,
+    reactive = (v == "REACTIVE")
+    return {"name": name, "verdict": v, "label": LABELS[v],
+            "armed": armed, "reactive": reactive,
             "age": (int(age) if age is not None else None)}
 
 
@@ -101,8 +111,9 @@ def report(args):
         for r in rows:
             age = ("%ds" % r["age"]) if r["age"] is not None else "?"
             mark = " (you)" if r["name"] == args.self_name else ""
-            print("%-12s %-9s armed=%-5s age=%s%s"
-                  % (r["name"], r["verdict"], str(r["armed"]).lower(), age, mark))
+            print("%-12s %-38s reactive=%-5s armed=%-5s age=%s%s"
+                  % (r["name"], r["label"], str(r["reactive"]).lower(),
+                     str(r["armed"]).lower(), age, mark))
     return 0
 
 

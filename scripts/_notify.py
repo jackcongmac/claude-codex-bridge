@@ -9,7 +9,7 @@ next to an already-dead peer doesn't page).
 Detect + the board note + the seen-commit all happen under ONE hold of the
 collaboration lock — deliberately NOT by shelling out to bridge-post (which would
 re-acquire the same lock and deadlock). The OS notify() fires AFTER the lock is
-released. Bumping the signal on a liveness note is intentional: other LIVE agents'
+released. Bumping the signal on a liveness note is intentional: other reactive agents'
 board-wait wakes and learns of the departure (same as the presence departure
 broadcast).
 

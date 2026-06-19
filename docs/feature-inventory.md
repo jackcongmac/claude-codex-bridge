@@ -41,7 +41,7 @@ liveness/pong helper, not the default wake task. Single-armer noclobber pidfile 
 
 **Presence & liveness.** `_presence.py` heartbeat + departure broadcast;
 🌟 `presence-keepalive.sh` keeps `last_seen` fresh independent of board-wait (so a
-short window is honest); `bridge-liveness.sh` reports LIVE/PRESENT/STALE/DEAD/DEPARTED
+short window is honest); `bridge-liveness.sh` reports REACTIVE/PRESENT/STALE/DEAD/DEPARTED
 at a glance (`--watch`), read-only; `bridge-live.sh` is the bounded go-live helper
 that registers the agent, starts the keepalive singleton, reports liveness, and
 prints the agent-owned `board-wait` ARM command.

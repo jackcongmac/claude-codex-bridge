@@ -105,16 +105,18 @@ scripts/board-wait.sh --self Claude --project . &     # Codex uses --self Codex
    stop collaborating, say so on the board (`status: done`) so the peer can stop
    arming too.
 
-`LIVE` means a window is joined and listening. It does not mean the latest handoff
-was accepted. The inbox receipt is the durable proof that the peer saw the task and
-either claimed it, declined it, or marked it done.
+`REACTIVE` means a window is joined, present, and has an armed board-wait. `PRESENT`
+means the heartbeat is fresh but the window is not armed, so re-arm it or drive it
+directly. Neither state means the latest handoff was accepted. The inbox receipt is
+the durable proof that the peer saw the task and either claimed it, declined it, or
+marked it done.
 
 **Why this is the whole point:** without arming, "two agents communicating" only
 works for headless watchers or a human relaying every message by hand. Arming is
 what makes an interactive agent a real, reactive participant. Treat "I posted but
 the peer didn't react" as a missing ARM, not a broken channel — re-arm and
 continue. The default waiter has no quiet timeout; a quiet project should stay
-LIVE for hours instead of exiting and relying on a timeout wake the harness may miss.
+armed for hours instead of exiting and relying on a timeout wake the harness may miss.
 
 ## 5. Membership — one protocol per project; join, presence, departure
 

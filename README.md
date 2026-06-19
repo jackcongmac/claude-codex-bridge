@@ -303,10 +303,10 @@ scripts/bridge-liveness.sh report --self Codex --project .
 scripts/bridge-liveness.sh report --self Codex --project . --json
 ```
 
-`LIVE` means the agent is present and currently armed. `PRESENT` means the
-heartbeat is fresh but the listener is not currently armed. `STALE`,
-`DEAD`, and `DEPARTED` mean the heartbeat is aging, expired, or explicitly marked
-departed.
+`REACTIVE` means the agent is present and currently armed. `PRESENT` means the
+heartbeat is fresh but the listener is not currently armed, so re-arm it or drive
+it directly. `STALE`, `DEAD`, and `DEPARTED` mean the heartbeat is aging,
+expired, or explicitly marked departed.
 
 ## Autonomous mode (event-driven, no manual poke)
 
