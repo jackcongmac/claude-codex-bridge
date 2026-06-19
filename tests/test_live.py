@@ -26,8 +26,8 @@ class BridgeLiveTests(unittest.TestCase):
                        capture_output=True, text=True)
         self.collab = pathlib.Path(self.tmp) / ".collab"
 
-    def _kill_keepalive(self):
-        pf = self.collab / ".keepalive_Claude.pid"
+    def _kill_keepalive(self, who="Claude"):
+        pf = self.collab / (".keepalive_%s.pid" % who)
         if pf.exists():
             try:
                 os.kill(int(pf.read_text().strip()), signal.SIGTERM)
@@ -37,6 +37,10 @@ class BridgeLiveTests(unittest.TestCase):
     def _parts(self):
         return json.loads(
             (self.collab / "collaboration_participants.json").read_text())["participants"]
+
+    def _write_parts(self, parts):
+        (self.collab / "collaboration_participants.json").write_text(
+            json.dumps({"participants": parts}))
 
     def _live(self):
         return subprocess.run(
@@ -59,6 +63,25 @@ class BridgeLiveTests(unittest.TestCase):
             self.assertNotIn("--stay-armed", r.stdout)
         finally:
             self._kill_keepalive()
+
+    def test_go_live_uses_assigned_name_after_collision(self):
+        fresh = time.strftime("%Y-%m-%d %H:%M:%S") + " PDT"
+        self._write_parts([{"name": "Claude", "role": "peer",
+                            "joined_at": fresh,
+                            "last_seen": fresh,
+                            "departed": False}])
+        (self.collab / ".boardwait_Claude.pid").write_text("%s\n" % os.getpid())
+
+        r = self._live()
+        try:
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("joined as: Claude-2", r.stdout)
+            self.assertIn('board-wait.sh --self "Claude-2"', r.stdout)
+            self.assertIn("Claude-2", {a["name"] for a in self._parts()})
+            self.assertTrue((self.collab / ".keepalive_Claude-2.pid").exists())
+        finally:
+            self._kill_keepalive()
+            self._kill_keepalive("Claude-2")
 
     def test_go_live_is_idempotent_single_keepalive(self):
         try:

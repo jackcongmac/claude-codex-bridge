@@ -37,14 +37,19 @@ fi
 
 # Register in participants.json (presence + role + last_seen) — LOCKED + idempotent
 # (a lock-free write could lose a concurrent join or clobber a presence/departure write).
-if ! "$PY3" "$HERE/_presence.py" register --self "$SELF" --role "$ROLE" --project "$PROJECT"; then
+REQUESTED_SELF="$SELF"
+if ! ASSIGNED_SELF="$("$PY3" "$HERE/_presence.py" register --self "$SELF" --role "$ROLE" --project "$PROJECT")"; then
   echo "[x] could not register on the board (collaboration lock busy?) — retry in a moment." >&2
   exit 1
 fi
+[ -n "$ASSIGNED_SELF" ] || ASSIGNED_SELF="$SELF"
+SELF="$ASSIGNED_SELF"
 
 cat <<EOF
 
 === JOINED: $SELF (role=$ROLE) on the collaboration board ===
+joined as: $SELF
+requested: $REQUESTED_SELF
 Project: $PROJECT
 
 The rules you are now bound by (full: docs/agent-collaboration-protocol.md):

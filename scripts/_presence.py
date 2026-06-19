@@ -28,6 +28,7 @@ import argparse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bridge_common as bc
+import _liveness
 
 
 def _age(last_seen, now):
@@ -71,22 +72,45 @@ def heartbeat(project, self_name):
         bc.release_lock(lock_p, "heartbeat-%s" % self_name)
 
 
+def _is_reactive_holder(participant, collab_dir, now, stale_after):
+    # Collision identity is intentionally tied to the A-layer liveness verdict:
+    # fresh last_seen plus an armed, live board-wait pidfile.
+    return bool(_liveness.verdict(
+        participant, collab_dir, now, stale_after, stale_after).get("reactive"))
+
+
+def _assigned_name(reg, requested, collab_dir, now, stale_after):
+    participants = reg.get("participants", [])
+    suffix = 2
+    candidate = requested
+    while True:
+        holder = next((a for a in participants if a.get("name") == candidate), None)
+        if holder is None or not _is_reactive_holder(holder, collab_dir, now, stale_after):
+            return candidate
+        candidate = "%s-%d" % (requested, suffix)
+        suffix += 1
+
+
 def register(project, self_name, role="peer", wait=10.0):
     """Locked idempotent JOIN registration: set role + last_seen + departed=False
     (add joined_at for a new member). Under collaboration.lock so concurrent joins —
     or overlap with a locked presence/departure write — can't lose participant state.
-    Returns True, or False if the lock couldn't be taken within `wait`."""
+    Returns the assigned participant name, or None if the lock couldn't be taken
+    within `wait`."""
     P = bc.collab_paths(project)
     parts_p = P["participants"]
     lock_p = P["lock"]
     now_s = bc.now_str()
     if not bc.acquire_lock(lock_p, "register-%s" % self_name, ttl=30, wait=wait):
-        return False
+        return None
     try:
         reg = bc.read_json(parts_p, {"participants": []}) or {"participants": []}
-        mine = next((a for a in reg["participants"] if a.get("name") == self_name), None)
+        assigned = _assigned_name(
+            reg, self_name, P["dir"], time.time(),
+            float(os.environ.get("BRIDGE_PRESENCE_STALE", "1800")))
+        mine = next((a for a in reg["participants"] if a.get("name") == assigned), None)
         if mine is None:
-            reg["participants"].append({"name": self_name, "role": role,
+            reg["participants"].append({"name": assigned, "role": role,
                                         "joined_at": now_s, "last_seen": now_s,
                                         "departed": False})
         else:
@@ -94,7 +118,7 @@ def register(project, self_name, role="peer", wait=10.0):
             mine["last_seen"] = now_s
             mine["departed"] = False
         bc.atomic_write_json(parts_p, reg)
-        return True
+        return assigned
     finally:
         bc.release_lock(lock_p, "register-%s" % self_name)
 
@@ -180,9 +204,11 @@ def main():
     elif a.cmd == "heartbeat":
         heartbeat(proj, a.self_name)
     elif a.cmd == "register":
-        if not register(proj, a.self_name, a.role, a.wait):
+        assigned = register(proj, a.self_name, a.role, a.wait)
+        if not assigned:
             print("LOCKBUSY", file=sys.stderr)
             sys.exit(3)
+        print(assigned)
 
 
 if __name__ == "__main__":

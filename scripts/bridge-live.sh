@@ -37,10 +37,15 @@ if [ ! -f "$COLLAB/collaboration.md" ] || [ ! -f "$COLLAB/collaboration_signal.j
   exit 1
 fi
 
-if ! "$PY3" "$HERE/_presence.py" register --self "$SELF" --role "$ROLE" --project "$PROJECT"; then
+REQUESTED_SELF="$SELF"
+if ! ASSIGNED_SELF="$("$PY3" "$HERE/_presence.py" register --self "$SELF" --role "$ROLE" --project "$PROJECT")"; then
   echo "[x] could not register on the board (collaboration lock busy?) — retry in a moment." >&2
   exit 1
 fi
+[ -n "$ASSIGNED_SELF" ] || ASSIGNED_SELF="$SELF"
+SELF="$ASSIGNED_SELF"
+echo "joined as: $SELF"
+[ "$REQUESTED_SELF" = "$SELF" ] || echo "requested: $REQUESTED_SELF"
 
 SAFE_SELF="$(printf '%s' "$SELF" | tr -c 'A-Za-z0-9_.-' '_')"
 PIDFILE="$COLLAB/.keepalive_${SAFE_SELF}.pid"
