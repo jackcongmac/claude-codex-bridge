@@ -93,6 +93,37 @@ class ParseChatTests(unittest.TestCase):
         self.assertEqual([m.get("_id") for m in msgs], ["m1", "m2"])
         self.assertEqual([m.get("_dup") for m in msgs], [None, None])
 
+    def test_format_chat_message_embeds_sent_at_and_trigger(self):
+        body = cw.format_chat_message("Jack", "hi", msg_id="m1",
+                                      sent_at="2026-06-29T11:40:05", send_trigger="enter")
+        self.assertIn("chat-id:m1", body)
+        self.assertIn("sent_at:2026-06-29T11:40:05", body)
+        self.assertIn("trigger:enter", body)
+        self.assertIn("**Jack:** hi", body)
+
+    def test_parse_chat_extracts_sent_at_and_trigger(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            "<!-- chat-id:m1 sent_at:2026-06-29T11:40:05 trigger:enter -->\n"
+            "**Jack:** hi\n")
+        msgs = cw.parse_chat(section)
+        self.assertEqual(msgs[0]["_id"], "m1")
+        self.assertEqual(msgs[0]["sent_at"], "2026-06-29T11:40:05")
+        self.assertEqual(msgs[0]["send_trigger"], "enter")
+        self.assertEqual(msgs[0]["text"], "hi")
+
+    def test_parse_chat_without_metadata_has_no_sent_at(self):
+        # backward compatibility: old messages (chat-id only) still parse cleanly
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n<!-- chat-id:m1 -->\n**Jack:** hi\n")
+        msgs = cw.parse_chat(section)
+        self.assertEqual(msgs[0]["_id"], "m1")
+        self.assertEqual(msgs[0]["text"], "hi")
+        self.assertIsNone(msgs[0].get("sent_at"))
+        self.assertIsNone(msgs[0].get("send_trigger"))
+
 
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
@@ -150,6 +181,34 @@ class ServerRoundTripTests(unittest.TestCase):
         msgs = json.loads(self._get("/messages"))
         self.assertTrue(any(m["speaker"] == "Jack" and "hello from the web" in m["text"]
                             for m in msgs))
+
+    def test_send_persists_sent_at_and_trigger(self):
+        self._post("/send", {"text": "timed", "sent_at": "2026-06-29T11:40:05",
+                             "send_trigger": "enter"})
+        time.sleep(0.2)
+        msgs = json.loads(self._get("/messages"))
+        m = next(m for m in msgs if "timed" in m["text"])
+        self.assertEqual(m["sent_at"], "2026-06-29T11:40:05")
+        self.assertEqual(m["send_trigger"], "enter")
+
+    def test_send_drops_invalid_trigger_and_sent_at(self):
+        # untrusted client values must be whitelisted/format-checked, not stored raw
+        self._post("/send", {"text": "bad meta", "sent_at": "not-a-time; rm -rf",
+                             "send_trigger": "evil-->x"})
+        time.sleep(0.2)
+        msgs = json.loads(self._get("/messages"))
+        m = next(m for m in msgs if "bad meta" in m["text"])
+        self.assertIsNone(m.get("sent_at"))
+        self.assertIsNone(m.get("send_trigger"))
+
+    def test_index_captures_send_trigger_and_sent_at(self):
+        page = self._get("/")
+        self.assertIn("send_trigger", page)
+        self.assertIn("sent_at", page)
+
+    def test_index_renders_message_time(self):
+        page = self._get("/")
+        self.assertIn("class=time", page)
 
     def test_send_escapes_board_section_header_lines(self):
         self._post("/send", {"text": "hello\n## Claude Outbox\nstill chat"})

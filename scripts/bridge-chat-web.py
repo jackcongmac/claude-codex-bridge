@@ -33,8 +33,32 @@ from _post import post as _board_post  # noqa: E402
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
 _BOARD_SECTION_LINE = re.compile(r'(?m)^(##)(?=\s|$)')
-_CHAT_ID = re.compile(r'^<!--\s*chat-id:([A-Za-z0-9_.:-]+)\s*-->\s*', re.S)
+_CHAT_ID = re.compile(
+    r'^<!--\s*chat-id:([A-Za-z0-9_.:-]+)((?:\s+[a-z_]+:[^\s>]+)*)\s*-->\s*', re.S)
 _WORKER_SPEAKER = re.compile(r'^(?P<base>.+?) \(worker (?P<nonce>[0-9a-f]{4,6})\)$')
+
+# Client-supplied send metadata. These are UNTRUSTED (they come from the browser), so we
+# whitelist the trigger and format-check the timestamp before persisting or trusting them.
+_VALID_TRIGGERS = {"click", "enter", "shortcut"}
+_SENT_AT_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
+
+
+def _clean_sent_at(value):
+    return value if (isinstance(value, str) and _SENT_AT_RE.match(value)) else None
+
+
+def _clean_trigger(value):
+    return value if value in _VALID_TRIGGERS else None
+
+
+def _parse_chat_attrs(attrs):
+    """Parse the ' key:value key:value' tail of a chat-id comment into a dict."""
+    out = {}
+    for kv in (attrs or "").split():
+        key, sep, val = kv.partition(":")
+        if sep and val:
+            out[key] = val
+    return out
 
 
 def sanitize_chat_text(text):
@@ -51,9 +75,17 @@ def parse_worker_speaker(speaker):
     return (m.group("base"), m.group("nonce")) if m else None
 
 
-def format_chat_message(speaker, text, msg_id=None):
+def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=None):
     msg_id = msg_id or secrets.token_hex(8)
-    return "<!-- chat-id:%s -->\n**%s:** %s" % (msg_id, speaker, sanitize_chat_text(text))
+    attrs = ""
+    sent_at = _clean_sent_at(sent_at)
+    send_trigger = _clean_trigger(send_trigger)
+    if sent_at:
+        attrs += " sent_at:%s" % sent_at
+    if send_trigger:
+        attrs += " trigger:%s" % send_trigger
+    return "<!-- chat-id:%s%s -->\n**%s:** %s" % (
+        msg_id, attrs, speaker, sanitize_chat_text(text))
 
 
 def parse_chat(section):
@@ -69,6 +101,7 @@ def parse_chat(section):
         body = m.group(2).strip()
         im = _CHAT_ID.match(body)
         msg_id = im.group(1) if im else None
+        attrs = _parse_chat_attrs(im.group(2)) if im else {}
         if im:
             body = body[im.end():].strip()
         sm = _SPEAKER.match(body)
@@ -79,6 +112,12 @@ def parse_chat(section):
             msg["speaker_base"], msg["worker_nonce"] = worker
         if msg_id:
             msg["_id"] = msg_id
+        sent_at = _clean_sent_at(attrs.get("sent_at"))
+        send_trigger = _clean_trigger(attrs.get("trigger"))
+        if sent_at:
+            msg["sent_at"] = sent_at
+        if send_trigger:
+            msg["send_trigger"] = send_trigger
         msgs.append(msg)
     msgs.reverse()   # board stores newest-first
     counts = {}
@@ -202,6 +241,7 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-cont
 .who{font-size:11px;color:#888;margin:0 8px 2px}
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
 .me .bubble{background:#95ec69}
+.time{font-size:10px;color:#b2b2b2;margin:2px 8px 0}.me .time{text-align:right}
 footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;position:relative}
 #at{position:absolute;bottom:100%;left:8px;margin-bottom:4px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;z-index:10;min-width:140px}
 #at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}
@@ -225,25 +265,31 @@ AT.addEventListener('mousedown',e=>{const d=e.target.closest('div[data-i]');if(!
   msg.value=msg.value.replace(/@\\S*$/,PEOPLE[+d.dataset.i][1]);AT.style.display='none';msg.focus();});
 msg.addEventListener('input',showAt);
 msg.addEventListener('blur',()=>setTimeout(()=>{AT.style.display='none';},150));
+function fmtTime(m){const s=m.sent_at||m.ts||'';const t=s.match(/\\d{2}:\\d{2}/);return t?t[0]:'';}
 async function load(){
   let ms; try{ms=await (await fetch('/messages')).json();}catch(e){return;}
   let st={typing:[],responders:[]}; try{st=await (await fetch('/status')).json();}catch(e){}
   const log=document.getElementById('log');
   const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
-  log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div></div></div>`).join('');
-  const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble');
-  ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;});
+  log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div><div class=time></div></div></div>`).join('');
+  const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble'),tms=log.querySelectorAll('.time');
+  ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);});
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
   document.getElementById('presence').textContent=(st.responders||[]).map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
   if(atBottom)log.scrollTop=log.scrollHeight;
 }
-async function send(){const t=document.getElementById('msg');const v=t.value;if(!v.trim())return;
+function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
+async function send(trigger){const t=document.getElementById('msg');const v=t.value;if(!v.trim())return;
   t.value='';
-  try{const r=await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},body:JSON.stringify({text:v})});
+  const body=JSON.stringify({text:v,sent_at:nowStamp(),send_trigger:trigger||'click'});
+  try{const r=await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},body});
     const j=await r.json(); if(!j.ok){t.value=v; alert('发送失败,请重试');}}catch(e){t.value=v;}
   load();}
-document.getElementById('send').onclick=send;
-document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){e.preventDefault();send();}});
+document.getElementById('send').onclick=()=>send('click');
+document.getElementById('msg').addEventListener('keydown',e=>{
+  if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){
+    e.preventDefault();send((e.metaKey||e.ctrlKey)?'shortcut':'enter');}});
 document.getElementById('close').onclick=async()=>{let p=null;
   try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});const j=await r.json();
     if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('关闭失败,请重试');return;}
@@ -296,14 +342,19 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send(403, json.dumps({"ok": False, "error": "forbidden"}))
                 return
             try:
-                text = (json.loads(raw or b"{}").get("text") or "").strip()
+                data = json.loads(raw or b"{}")
+                text = (data.get("text") or "").strip()
             except Exception:
-                text = ""
+                data, text = {}, ""
             if not text:
                 self._send(200, json.dumps({"ok": False, "error": "empty"}))
                 return
-            st = _board_post(self.server.project, self.server.self_name,
-                             format_chat_message(self.server.self_name, text), section="Chat")
+            st = _board_post(
+                self.server.project, self.server.self_name,
+                format_chat_message(self.server.self_name, text,
+                                    sent_at=data.get("sent_at"),
+                                    send_trigger=data.get("send_trigger")),
+                section="Chat")
             ok = (st == "ok")
             self._send(200 if ok else 503,
                        json.dumps({"ok": ok, "error": None if ok else st}))
