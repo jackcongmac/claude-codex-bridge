@@ -263,8 +263,11 @@ def _prompt(self_name, msgs, prompt_msg):
     return (
         "You are %s, one of two AI agents (Claude, Codex) in a group chat with the "
         "human. Reply BRIEFLY (1-3 sentences) to this message, which is addressed "
-        "to you. To pass the turn, @-mention someone: @%s (the other agent), @<human>, "
-        "or @All. If you have nothing useful to add, reply with exactly: PASS\n\n"
+        "to you. If you have nothing useful to add, reply with exactly: PASS\n\n"
+        "DO NOT @-mention the other agent (@%s) unless you genuinely need them to act "
+        "on something specific — an @ forces them to reply and creates agent-to-agent "
+        "ping-pong. To stay silent, reply exactly PASS; never @ someone just to pass "
+        "the turn. Only @ the human if you are directly asking them something.\n\n"
         "IDENTITY: You are the disposable READ-ONLY group-chat RESPONDER instance for "
         "%s, spawned only to answer chat. You can read the repo but CANNOT write files, "
         "run write/commit commands, or implement code. You are NOT the human's "

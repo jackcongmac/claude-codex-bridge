@@ -407,6 +407,15 @@ class PromptIdentityTests(unittest.TestCase):
         self.assertIn("reopen", p)
         self.assertIn("interactive", p)
 
+    def test_prompt_discourages_at_mentioning_the_other_agent(self):
+        # Both agents still reply to plain human messages (that's _targets); but the
+        # prompt must NOT tell them to @ the other agent — an @ forces a reply and
+        # creates agent-to-agent ping-pong. PASS stays the quiet path.
+        p = self._prompt("Claude").lower()
+        self.assertIn("do not @-mention the other agent", p)
+        self.assertIn("ping-pong", p)
+        self.assertNotIn("to pass the turn, @-mention", p)
+
 
 if __name__ == "__main__":
     unittest.main()
