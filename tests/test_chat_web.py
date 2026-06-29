@@ -232,6 +232,12 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
 
+    def test_index_guards_enter_send_for_ime_composition(self):
+        page = self._get("/")
+
+        self.assertIn("isComposing", page)
+        self.assertIn("229", page)
+
 
 class ServerStartupTests(unittest.TestCase):
     def setUp(self):

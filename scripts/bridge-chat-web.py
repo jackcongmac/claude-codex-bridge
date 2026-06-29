@@ -243,7 +243,7 @@ async function send(){const t=document.getElementById('msg');const v=t.value;if(
     const j=await r.json(); if(!j.ok){t.value=v; alert('发送失败,请重试');}}catch(e){t.value=v;}
   load();}
 document.getElementById('send').onclick=send;
-document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
+document.getElementById('msg').addEventListener('keydown',e=>{if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){e.preventDefault();send();}});
 document.getElementById('close').onclick=async()=>{let p=null;
   try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});const j=await r.json();
     if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('关闭失败,请重试');return;}
