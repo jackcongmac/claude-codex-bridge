@@ -10,6 +10,34 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 REVIEW = SCRIPTS / "_review.py"
+sys.path.insert(0, str(SCRIPTS))
+from _review import _detected_recorder  # noqa: E402
+
+
+class DetectedRecorderTests(unittest.TestCase):
+    def test_codex_marker_wins_over_inherited_claudecode(self):
+        self.assertEqual(
+            _detected_recorder("Codex", {
+                "CODEX_SANDBOX": "seatbelt",
+                "CLAUDECODE": "1",
+            }),
+            "Codex",
+        )
+
+    def test_claude_code_marker_detects_claude(self):
+        self.assertEqual(
+            _detected_recorder("Claude", {"CLAUDE_CODE_ENTRYPOINT": "cli"}),
+            "Claude",
+        )
+
+    def test_codex_thread_id_detects_codex(self):
+        self.assertEqual(
+            _detected_recorder("Codex", {"CODEX_THREAD_ID": "thread-123"}),
+            "Codex",
+        )
+
+    def test_no_positive_marker_falls_back_to_self_name(self):
+        self.assertEqual(_detected_recorder("Reviewer", {}), "Reviewer")
 
 
 class ReviewLedgerTests(unittest.TestCase):
@@ -26,8 +54,9 @@ class ReviewLedgerTests(unittest.TestCase):
 
     def _record(self, *args, env=None):
         run_env = os.environ.copy()
-        run_env.pop("CODEX_CI", None)
-        run_env.pop("CODEX_THREAD_ID", None)
+        for key in list(run_env):
+            if key.startswith("CODEX_"):
+                run_env.pop(key, None)
         run_env.pop("CLAUDECODE", None)
         run_env.pop("CLAUDE_CODE_ENTRYPOINT", None)
         run_env.pop("CLAUDE_CODE", None)

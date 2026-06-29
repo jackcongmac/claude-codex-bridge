@@ -38,8 +38,9 @@ def _nonce():
 
 
 def _detected_recorder(self_name, env=None):
-    env = env or os.environ
-    if env.get("CODEX_CI") or env.get("CODEX_THREAD_ID"):
+    if env is None:
+        env = os.environ
+    if any(key.startswith("CODEX_") and value for key, value in env.items()):
         return "Codex"
     if (env.get("CLAUDECODE") or env.get("CLAUDE_CODE_ENTRYPOINT")
             or env.get("CLAUDE_CODE") or env.get("CLAUDE_SESSION_ID")):
