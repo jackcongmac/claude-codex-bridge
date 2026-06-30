@@ -36,3 +36,18 @@ def decide(project, msgs, judge):
         return {"action": "ask",
                 "question": verdict.get("question") or "你是要现在就开始做吗?"}
     return {"action": "ignore", "reason": "opinion"}
+
+
+def dispatch(project, decision, poster, enqueue):
+    action = decision.get("action")
+    if action == "execute":
+        poster("开始执行:%s" % decision["task"])   # ack-before-act, strictly first
+        enqueue(decision["task"])
+        return "acked-enqueued"
+    if action == "request_greenlight":
+        poster("这个需要你点头才能做(高风险):%s" % decision.get("task", ""))
+        return "requested-greenlight"
+    if action == "ask":
+        poster(decision.get("question") or "你是要现在就开始做吗?")
+        return "asked"
+    return "noop"

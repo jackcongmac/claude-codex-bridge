@@ -50,5 +50,41 @@ class DecideTests(unittest.TestCase):
                       judge=lambda t, c: {"kind": "opinion"})
         self.assertEqual(d["action"], "ignore")
 
+class DispatchTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.mkdir(os.path.join(self.tmp, ".collab"))
+        self.events = []
+
+    def _poster(self, text): self.events.append(("post", text))
+    def _enqueue(self, task): self.events.append(("enqueue", task))
+
+    def test_execute_acks_before_enqueue(self):
+        st = ce.dispatch(self.tmp, {"action": "execute", "task": "做 ④"},
+                         self._poster, self._enqueue)
+        self.assertEqual(st, "acked-enqueued")
+        kinds = [e[0] for e in self.events]
+        self.assertEqual(kinds, ["post", "enqueue"])          # ack strictly first
+        self.assertIn("开始执行", self.events[0][1])
+        self.assertIn("做 ④", self.events[0][1])
+
+    def test_request_greenlight_posts_and_does_not_enqueue(self):
+        st = ce.dispatch(self.tmp, {"action": "request_greenlight", "task": "发版"},
+                         self._poster, self._enqueue)
+        self.assertEqual(st, "requested-greenlight")
+        self.assertEqual([e[0] for e in self.events], ["post"])
+        self.assertIn("需要你点头", self.events[0][1])
+
+    def test_ask_posts_question_only(self):
+        st = ce.dispatch(self.tmp, {"action": "ask", "question": "现在做④吗?"},
+                         self._poster, self._enqueue)
+        self.assertEqual(st, "asked")
+        self.assertEqual([e[0] for e in self.events], ["post"])
+
+    def test_ignore_is_noop(self):
+        st = ce.dispatch(self.tmp, {"action": "ignore"}, self._poster, self._enqueue)
+        self.assertEqual(st, "noop")
+        self.assertEqual(self.events, [])
+
 if __name__ == "__main__":
     unittest.main()
