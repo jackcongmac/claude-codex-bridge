@@ -16,7 +16,7 @@ import _chat_judge  # noqa: E402
 
 _HIGH_RISK = re.compile(
     r"(发版|发布|publish|release|打?\s*tag\b|删\s*(除|文件|掉)|\bdelete\b|\brm\b|"
-    r"force[-\s]?push|--force|\bdrop\b)", re.I)
+    r"force[-\s]?push|--force|(?<![-\w])drop(?![-\w]))", re.I)
 
 
 def is_high_risk(task_text):

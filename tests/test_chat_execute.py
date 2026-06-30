@@ -12,6 +12,12 @@ class HighRiskTests(unittest.TestCase):
         for t in ["把④英文化做了", "加个键盘导航", "修一下时间戳显示", "run the tests"]:
             self.assertFalse(ce.is_high_risk(t), t)
 
+    def test_drag_and_drop_is_not_high_risk(self):
+        # regression: "drop" inside "drag-and-drop"/"dropdown" must NOT trigger the DROP gate
+        for t in ["Fix the image upload/paste/drag-and-drop channel",
+                  "add a dropdown menu", "支持拖拽 drag-and-drop 上传"]:
+            self.assertFalse(ce.is_high_risk(t), t)
+
 class DecideTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
