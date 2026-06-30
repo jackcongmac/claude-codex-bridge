@@ -367,6 +367,12 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("isComposing", page)
         self.assertIn("229", page)
 
+    def test_index_double_enter_also_sends(self):
+        # a quick double-press of Enter must send even mid/post-IME composition (the first
+        # Enter confirms the IME candidate; the second within the window sends)
+        page = self._get("/")
+        self.assertIn("lastEnterAt", page)
+
 
 class ServerStartupTests(unittest.TestCase):
     def setUp(self):

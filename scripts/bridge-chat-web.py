@@ -303,9 +303,16 @@ async function send(trigger){const t=document.getElementById('msg');const v=t.va
     const j=await r.json(); if(!j.ok){t.value=v; alert('发送失败,请重试');}}catch(e){t.value=v;}
   load();}
 document.getElementById('send').onclick=()=>send('click');
+let lastEnterAt=0;
 document.getElementById('msg').addEventListener('keydown',e=>{
-  if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){
-    e.preventDefault();send((e.metaKey||e.ctrlKey)?'shortcut':'enter');}});
+  if(e.key!=='Enter'||e.shiftKey)return;
+  const composing=e.isComposing||e.keyCode===229;
+  const now=Date.now();
+  const dbl=(now-lastEnterAt)<=500;
+  lastEnterAt=now;
+  if(dbl){e.preventDefault();lastEnterAt=0;send((e.metaKey||e.ctrlKey)?'shortcut':'enter');return;}
+  if(!composing){e.preventDefault();send((e.metaKey||e.ctrlKey)?'shortcut':'enter');}
+});
 async function uploadImage(file){
   try{const r=await fetch('/upload',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Token':TOKEN},body:file});
     const j=await r.json();return j.ok?j.id:null;}catch(e){return null;}}
