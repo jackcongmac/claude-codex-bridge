@@ -1,4 +1,5 @@
 import os, pathlib, sys, tempfile, unittest
+import subprocess
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import _chat_executor as ex
 
@@ -61,6 +62,27 @@ class RunTaskTests(unittest.TestCase):
                         push=lambda p: {"ok": False, "pushed_sha": ""})
         self.assertFalse(r["ok"])
         self.assertIn("push", r["summary"].lower())
+
+class GitHeadTests(unittest.TestCase):
+    def test_git_head_returns_current_sha(self):
+        d = tempfile.mkdtemp()
+        subprocess.run(["git", "init", "-q", d], check=True)
+        subprocess.run(["git", "-C", d, "-c", "user.email=a@b.c",
+                        "-c", "user.name=t", "commit", "--allow-empty", "-m", "x"],
+                       check=True)
+        sha = ex._git_head(d)
+        self.assertRegex(sha, r"^[0-9a-f]{40}$")
+
+class RolesWiringTests(unittest.TestCase):
+    def test_implementer_and_reviewer_roles_resolved_from_config(self):
+        d = tempfile.mkdtemp(); os.mkdir(os.path.join(d, ".collab"))
+        import json
+        with open(os.path.join(d, ".collab", "roles.json"), "w") as f:
+            json.dump({"human": "Jack", "lead": "Claude"}, f)
+        impl, rev = ex._roles_for(d)        # (implementer, reviewer)
+        self.assertEqual(rev, "Claude")     # lead reviews
+        self.assertNotEqual(impl, rev)      # implementer is the other side
+        self.assertNotEqual(impl, "")       # and is concrete
 
 if __name__ == "__main__":
     unittest.main()
