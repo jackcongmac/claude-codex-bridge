@@ -36,6 +36,7 @@ copy_if_absent "$REPO_DIR/templates/collaboration.md"          "$COLLAB/collabor
 copy_if_absent "$REPO_DIR/templates/collaboration_signal.json" "$COLLAB/collaboration_signal.json"
 copy_if_absent "$REPO_DIR/templates/collaboration_state.json"  "$COLLAB/collaboration_state.json"
 copy_if_absent "$REPO_DIR/templates/collaboration_queue.json"  "$COLLAB/collaboration_queue.json"
+copy_if_absent "$REPO_DIR/templates/roles.json"                "$COLLAB/roles.json"
 # Auto-discovery hooks -> project ROOT (a fresh agent window auto-reads these).
 # When initializing INTO ANOTHER project, rewrite the relative `scripts/...` refs
 # to the ABSOLUTE bridge scripts dir (the scripts live in the bridge install, not
