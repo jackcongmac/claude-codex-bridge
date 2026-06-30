@@ -96,7 +96,14 @@ def _run_tests(root):
     try:
         r = subprocess.run(["python3", "-m", "unittest", "discover", "-s", "tests", "-q"],
                            cwd=root, capture_output=True, text=True, timeout=600)
-        return r.returncode == 0
+        output = "%s\n%s" % (r.stdout or "", r.stderr or "")
+        ran = re.search(r"\bRan\s+(\d+)\s+tests?\b", output)
+        return (
+            r.returncode == 0
+            and ran is not None
+            and int(ran.group(1)) >= 1
+            and output.rstrip().endswith("OK")
+        )
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -122,7 +129,10 @@ def default_review(project, head_sha, call_llm=None, run_tests=None):
     # verdict here is the lead recording its own review (recorded_by matches reviewer; not
     # cross-identity forgery). The bridge-push gate remains the independent backstop.
     from _review import record, latest_verdict
-    record(root, reviewer, head_sha, verdict, note=note or "auto-review")
+    record_status = record(root, reviewer, head_sha, verdict, note=note or "auto-review")
+    if record_status != "ok":
+        return {"verdict": "FIX-FIRST",
+                "note": "could not record review: %s" % record_status}
     return latest_verdict(root, head_sha)
 
 

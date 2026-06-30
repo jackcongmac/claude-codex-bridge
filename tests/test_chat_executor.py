@@ -136,6 +136,31 @@ class DefaultReviewRecordTests(unittest.TestCase):
                               run_tests=lambda root: True)
         self.assertEqual(v["verdict"], "GO")
 
+    def test_record_failure_forces_fix_first_even_if_llm_and_tests_pass(self):
+        import _review
+        old_record = _review.record
+        old_latest = _review.latest_verdict
+        try:
+            _review.record = lambda *a, **kw: "actor_mismatch"
+            _review.latest_verdict = lambda *a, **kw: {"verdict": "GO", "note": "stale go"}
+
+            v = ex.default_review(self._proj(), "deadbeefcafe3456",
+                                  call_llm=lambda prompt, root: "VERDICT: GO clean",
+                                  run_tests=lambda root: True)
+        finally:
+            _review.record = old_record
+            _review.latest_verdict = old_latest
+
+        self.assertEqual(v["verdict"], "FIX-FIRST")
+        self.assertIn("could not record review: actor_mismatch", v.get("note", ""))
+
+
+class RunTestsGateTests(unittest.TestCase):
+    def test_empty_unittest_discovery_is_not_green(self):
+        d = tempfile.mkdtemp()
+        os.mkdir(os.path.join(d, "tests"))
+        self.assertFalse(ex._run_tests(d))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,7 +16,10 @@ import _chat_judge  # noqa: E402
 
 _HIGH_RISK = re.compile(
     r"(发版|发布|publish|release|打?\s*tag\b|删\s*(除|文件|掉)|\bdelete\b|\brm\b|"
-    r"force[-\s]?push|--force|(?<![-\w])drop(?![-\w]))", re.I)
+    r"force[-\s]?push|--force|git\s+reset\s+--hard\b|reset\s+--hard\b|"
+    r"git\s+clean\b|clean\s+-fdx\b|(?<![-\w])drop(?![-\w])|\bwipe\b|\berase\b|"
+    r"抹除|清空|清除|\bdeploy\b|部署|\bprod(?:uction)?\b|线上|生产|"
+    r"\bsecret\b|token\s+rotation|轮换密钥|\brotate\b)", re.I)
 
 
 def is_high_risk(task_text):
@@ -33,7 +36,7 @@ def decide(project, msgs, judge):
     kind = verdict.get("kind")
     if kind == "actionable":
         task = (verdict.get("task") or latest.get("text", "")).strip()
-        if is_high_risk(task):
+        if is_high_risk(task) or is_high_risk(latest.get("text", "")):
             return {"action": "request_greenlight", "task": task}
         return {"action": "execute", "task": task}
     if kind == "ambiguous":
@@ -159,15 +162,22 @@ def execute_once(project, judge=None, executor=None, poster=None):
         collab_paths(find_project_root(project))["board"], "Chat"))
     if not msgs:
         return "empty"
-    latest = msgs[-1]
-    mid = _msg_key(latest)
-    if mid in _load_handled(project):
-        return "handled"
+    handled = set(_load_handled(project))
+    selected_idx = None
+    selected = None
+    for idx, msg in enumerate(msgs):
+        if _chat_roles.is_human(msg.get("speaker", ""), project) and _msg_key(msg) not in handled:
+            selected_idx = idx
+            selected = msg
+            break
+    if selected is None:
+        return "none"
+    mid = _msg_key(selected)
     if poster is None:
         lead = _poster_speaker(project)
         fmt = _format_chat_fn()
         poster = lambda text: _board_post(project, lead, fmt(lead, text), section="Chat")
-    decision = decide(project, msgs, judge)
+    decision = decide(project, msgs[:selected_idx + 1], judge)
     _mark_handled(project, mid)
 
     captured = {}

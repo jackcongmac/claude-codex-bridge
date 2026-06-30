@@ -5,7 +5,12 @@ import _chat_execute as ce
 class HighRiskTests(unittest.TestCase):
     def test_flags_release_delete_publish(self):
         for t in ["发版 v0.9", "打 tag v1", "删掉这个文件", "git push --force",
-                  "publish to npm", "release the build", "drop the table"]:
+                  "publish to npm", "release the build", "drop the table",
+                  "git reset --hard", "reset --hard HEAD~1", "git clean",
+                  "clean -fdx", "删库 wipe everything", "erase the disk",
+                  "抹除缓存", "清空目录", "清除状态", "deploy to prod",
+                  "部署到线上", "production release", "rotate the secret",
+                  "token rotation"]:
             self.assertTrue(ce.is_high_risk(t), t)
 
     def test_allows_routine_work(self):
@@ -44,6 +49,12 @@ class DecideTests(unittest.TestCase):
         d = ce.decide(self.tmp, self._msgs(("Jack", "发版吧")),
                       judge=lambda t, c: {"kind": "actionable", "task": "发版 v0.9"})
         self.assertEqual(d["action"], "request_greenlight")
+
+    def test_high_risk_in_original_text_requests_greenlight_even_if_task_is_benign(self):
+        d = ce.decide(self.tmp, self._msgs(("Jack", "git push --force after cleanup")),
+                      judge=lambda t, c: {"kind": "actionable", "task": "cleanup branch"})
+        self.assertEqual(d["action"], "request_greenlight")
+        self.assertEqual(d["task"], "cleanup branch")
 
     def test_ambiguous_asks(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "④ 怎么样")),
@@ -193,8 +204,75 @@ class ExecuteOnceTests(unittest.TestCase):
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
 
-        self.assertEqual(st, "handled")
+        self.assertEqual(st, "none")
         self.assertEqual(self.posts, [])
+
+    def test_runs_oldest_unhandled_human_message_when_agent_report_is_latest(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:05:00 PDT\n\n"
+                "<!-- chat-id:agent-report-newer -->\n"
+                "**Claude:** ✅ 完成:previous task\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:human-greenlight-older -->\n"
+                "**Jack:** yes, execute the next task\n")
+
+        seen = {}
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            def judge(t, c):
+                seen["text"] = t
+                return {"kind": "actionable", "task": "execute the next task"}
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=judge,
+                executor=lambda task, project: {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(seen["text"], "yes, execute the next task")
+        self.assertIn("human-greenlight-older", ce._load_handled(self.tmp))
+        self.assertNotIn("agent-report-newer", ce._load_handled(self.tmp))
+
+    def test_skips_handled_human_message_and_runs_next_oldest_unhandled_human_message(self):
+        import json
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:10:00 PDT\n\n"
+                "<!-- chat-id:agent-report-newer -->\n"
+                "**Claude:** ✅ 完成:previous task\n"
+                "### 2026-06-29 10:05:00 PDT\n\n"
+                "<!-- chat-id:human-second -->\n"
+                "**Jack:** do the second task\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:human-first -->\n"
+                "**Jack:** do the first task\n")
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
+            json.dump({"handled": ["human-first"]}, f)
+
+        seen = {}
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            def judge(t, c):
+                seen["text"] = t
+                return {"kind": "actionable", "task": "second task"}
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=judge,
+                executor=lambda task, project: {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(seen["text"], "do the second task")
+        self.assertIn("human-second", ce._load_handled(self.tmp))
 
     def test_actionable_run_marks_latest_message_handled(self):
         with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
