@@ -93,6 +93,15 @@ def _typing_path(project):
     return collab_paths(project)["chat_typing"]
 
 
+def _image_path_for(project, msg):
+    """Return the absolute path to a chat message's image, or None."""
+    ref = (msg or {}).get("img")
+    if not ref or not re.match(r"^[0-9a-f]{8,}\.(png|jpg|gif|webp)$", ref):
+        return None
+    p = os.path.join(collab_paths(find_project_root(project))["dir"], "chat_uploads", ref)
+    return p if os.path.exists(p) else None
+
+
 def _normalize_delivery(delivery):
     if not isinstance(delivery, dict):
         delivery = {}
@@ -281,7 +290,11 @@ def _prompt(self_name, msgs, prompt_msg):
            prompt_msg["speaker"], prompt_msg["text"], convo, self_name))
 
 
-def _spawn_claude(prompt, project):
+def _spawn_claude(prompt, project, image_path=None):
+    if image_path:
+        prompt = prompt + (
+            "\n\n[The user attached an image at: %s — use your Read tool to view it before replying.]"
+            % image_path)
     claude = os.environ.get("CLAUDE_BIN") or "claude"
     cmd = [claude, "-p", prompt, "--output-format", "json", "--strict-mcp-config",
            "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "default",
@@ -294,11 +307,14 @@ def _spawn_claude(prompt, project):
         return ""
 
 
-def _spawn_codex(prompt, project):
+def _spawn_codex(prompt, project, image_path=None):
     codex = os.environ.get("CODEX_BIN") or "codex"
     last = os.path.join(tempfile.mkdtemp(), "last.txt")
-    cmd = [codex, "exec", prompt, "--output-last-message", last, "-C", project,
-           "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"]
+    cmd = [codex, "exec", prompt]
+    if image_path:
+        cmd += ["-i", image_path]
+    cmd += ["--output-last-message", last, "-C", project,
+            "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"]
     try:
         subprocess.run(cmd, capture_output=True, text=True,
                        timeout=int(os.environ.get("BRIDGE_CHAT_TURN_TIMEOUT", "180")))
@@ -342,7 +358,9 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         return "capped"
     _set_typing(project, self_name, prompt_msg)
     try:
-        reply = ((runner or _default_runner(self_name))(_prompt(self_name, msgs, prompt_msg), project) or "").strip()
+        image_path = _image_path_for(project, prompt_msg)
+        reply = ((runner or _default_runner(self_name))(
+            _prompt(self_name, msgs, prompt_msg), project, image_path) or "").strip()
     finally:
         _clear_typing(project, self_name)
     if not reply or reply.upper() == "PASS":

@@ -4,6 +4,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -11,6 +12,65 @@ SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import _chat_respond as cr  # noqa: E402
 from bridge_common import read_section  # noqa: E402
+
+
+class ImagePathResolverTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.collab = pathlib.Path(self.tmp) / ".collab"
+        self.uploads = self.collab / "chat_uploads"
+        self.uploads.mkdir(parents=True)
+
+    def test_returns_existing_chat_image_path_for_safe_ref(self):
+        ref = "a1b2c3d4.png"
+        image = self.uploads / ref
+        image.write_bytes(b"png")
+
+        self.assertEqual(cr._image_path_for(self.tmp, {"img": ref}), str(image))
+
+    def test_returns_none_when_message_has_no_image(self):
+        self.assertIsNone(cr._image_path_for(self.tmp, {"text": "hello"}))
+
+    def test_returns_none_for_invalid_or_traversal_refs(self):
+        for ref in ("../x", "nope"):
+            with self.subTest(ref=ref):
+                self.assertIsNone(cr._image_path_for(self.tmp, {"img": ref}))
+
+    def test_returns_none_when_safe_ref_file_is_missing(self):
+        self.assertIsNone(cr._image_path_for(self.tmp, {"img": "a1b2c3d4.png"}))
+
+
+class SpawnImageTests(unittest.TestCase):
+    def test_spawn_codex_includes_image_flag_when_image_path_is_provided(self):
+        image_path = "/tmp/a1b2c3d4.png"
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            last = cmd[cmd.index("--output-last-message") + 1]
+            pathlib.Path(last).write_text("ok")
+            return mock.Mock()
+
+        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(cr._spawn_codex("prompt", str(ROOT), image_path=image_path), "ok")
+
+        self.assertIn("-i", captured["cmd"])
+        self.assertEqual(captured["cmd"][captured["cmd"].index("-i") + 1], image_path)
+
+    def test_spawn_claude_includes_image_path_and_read_instruction_in_prompt(self):
+        image_path = "/tmp/a1b2c3d4.png"
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["cmd"] = cmd
+            return mock.Mock(stdout=json.dumps({"result": "ok"}))
+
+        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
+            self.assertEqual(cr._spawn_claude("prompt", str(ROOT), image_path=image_path), "ok")
+
+        sent_prompt = captured["cmd"][captured["cmd"].index("-p") + 1]
+        self.assertIn(image_path, sent_prompt)
+        self.assertIn("Read", sent_prompt)
 
 
 class RespondOnceTests(unittest.TestCase):
@@ -48,12 +108,31 @@ class RespondOnceTests(unittest.TestCase):
 
     def _run(self, who, reply="ok", max_turns=6):
         return cr.respond_once(self.tmp, who, max_turns=max_turns,
-                               runner=lambda prompt, project: reply)
+                               runner=lambda prompt, project, image_path=None: reply)
 
     def test_responds_when_mentioned(self):
         self._set_chat([("Jack", "@Claude hello there")])
         self.assertEqual(self._run("Claude", reply="hi back"), "responded")
         self.assertIn("**Claude:** hi back", self._chat_text())
+
+    def test_passes_prompt_image_path_to_runner(self):
+        ref = "a1b2c3d4.png"
+        uploads = self.collab / "chat_uploads"
+        uploads.mkdir()
+        image = uploads / ref
+        image.write_bytes(b"png")
+        self.collab.joinpath("collaboration.md").write_text(
+            "# Board\n\n## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            + cr.format_chat_message("Jack", "@Claude look at this", msg_id="m1", img=ref))
+        seen = {}
+
+        def runner(prompt, project, image_path=None):
+            seen["image_path"] = image_path
+            return "image received"
+
+        self.assertEqual(cr.respond_once(self.tmp, "Claude", runner=runner), "responded")
+        self.assertEqual(seen["image_path"], str(image))
 
     def test_silent_when_someone_else_is_addressed(self):
         # @Codex means "for Codex"; Claude may stay quiet.
@@ -159,7 +238,7 @@ class RespondOnceTests(unittest.TestCase):
         convo = [("Jack", "@Claude question one")]
         self._set_chat(convo)
 
-        def runner(prompt, project):           # a fresh @Claude prompt lands mid-spawn
+        def runner(prompt, project, image_path=None):  # a fresh @Claude prompt lands mid-spawn
             convo.append(("Jack", "@Claude scrap that — question two"))
             self._set_chat(convo)
             return "answer to question one"
@@ -171,7 +250,7 @@ class RespondOnceTests(unittest.TestCase):
         convo = [("Jack", "@Claude question one")]
         self._set_chat(convo)
 
-        def runner(prompt, project):           # an unrelated message (not for me) lands
+        def runner(prompt, project, image_path=None):  # an unrelated message (not for me) lands
             convo.append(("Codex", "我这边在跑测试"))
             self._set_chat(convo)
             return "answer one"
@@ -183,7 +262,7 @@ class RespondOnceTests(unittest.TestCase):
         convo = [("Jack", "@Claude question one")]
         self._set_chat(convo)
 
-        def runner(prompt, project):           # user closed/archived the live chat mid-spawn
+        def runner(prompt, project, image_path=None):  # user closed/archived the live chat mid-spawn
             (self.collab / "collaboration.md").write_text("# Board\n\n## Chat\n\n")
             return "late answer"
 
@@ -300,7 +379,7 @@ class RespondOnceTests(unittest.TestCase):
         self._set_chat([("Jack", "@Claude think")])
         typing_path = self.collab / "chat_typing.json"
 
-        def runner(prompt, project):
+        def runner(prompt, project, image_path=None):
             state = json.loads(typing_path.read_text())
             self.assertEqual(state["agents"]["Claude"]["status"], "thinking")
             self.assertIn("message_id", state["agents"]["Claude"])
@@ -358,7 +437,7 @@ class AutoRespondGateTests(unittest.TestCase):
         (self.collab / "collaboration.md").write_text(body)
         calls = {"n": 0}
 
-        def runner(prompt, project):
+        def runner(prompt, project, image_path=None):
             calls["n"] += 1
             return "I should never be posted"
 
@@ -373,7 +452,7 @@ class AutoRespondGateTests(unittest.TestCase):
         body = "# Board\n\n## Chat\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** @Claude hi\n"
         (self.collab / "collaboration.md").write_text(body)
 
-        status = cr.respond_once(self.tmp, "Claude", runner=lambda p, proj: "hello back")
+        status = cr.respond_once(self.tmp, "Claude", runner=lambda p, proj, image_path=None: "hello back")
 
         self.assertEqual(status, "responded")
         self.assertIn("**Claude:** hello back", (self.collab / "collaboration.md").read_text())
