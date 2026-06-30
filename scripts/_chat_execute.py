@@ -12,6 +12,7 @@ from bridge_common import collab_paths, find_project_root, now_str  # noqa: E402
 import _chat_roles  # noqa: E402
 from _post import post as _board_post   # noqa: E402
 import _chat_executor  # noqa: E402
+import _chat_judge  # noqa: E402
 
 _HIGH_RISK = re.compile(
     r"(发版|发布|publish|release|打?\s*tag\b|删\s*(除|文件|掉)|\bdelete\b|\brm\b|"
@@ -138,7 +139,7 @@ def main():
     o.add_argument("--project", default=None)
     a = ap.parse_args()
     if a.cmd == "once":
-        print(execute_once(a.project))
+        print(execute_once(a.project, judge=_chat_judge.default_judge))
     return 0
 
 

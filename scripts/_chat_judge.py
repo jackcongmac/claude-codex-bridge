@@ -1,0 +1,97 @@
+"""LLM-backed classifier for chat-triggered execution greenlights."""
+import json
+import subprocess
+
+
+_DEFAULT_QUESTION = "你是要现在就开始做吗?"
+_VALID_KINDS = {"actionable", "opinion", "ambiguous"}
+
+
+def _safe_ambiguous():
+    return {"kind": "ambiguous", "question": _DEFAULT_QUESTION}
+
+
+def _build_prompt(text, context):
+    recent = []
+    for msg in (context or [])[-8:]:
+        if not isinstance(msg, dict):
+            continue
+        recent.append({
+            "speaker": str(msg.get("speaker", "")),
+            "text": str(msg.get("text", "")),
+        })
+
+    return """You classify ONE latest human message in a software-development group chat.
+
+Decide whether the human is directing the team to DO, implement, fix, run, change,
+or otherwise act now ("actionable"), merely discussing or giving an opinion
+("opinion"), or unclear enough that the team should ask a follow-up ("ambiguous").
+
+If actionable, extract a concrete task the team can execute. If ambiguous, provide
+a short clarifying question. Reply with ONLY one JSON object and no prose, no
+Markdown, no code fences:
+{"kind":"actionable|opinion|ambiguous","task":"...","question":"..."}
+
+Prior context, oldest to newest, up to the last 8 messages:
+%s
+
+Latest human message:
+%s
+""" % (
+        json.dumps(recent, ensure_ascii=False, indent=2),
+        json.dumps(str(text or ""), ensure_ascii=False),
+    )
+
+
+def _parse_json_object(raw):
+    if not raw:
+        return None
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end < start:
+        return None
+    try:
+        parsed = json.loads(raw[start:end + 1])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def classify(text, context, call_llm):
+    """text: the human's latest message. context: list of prior msg dicts ({speaker,text}).
+    call_llm(prompt:str)->str: injected boundary that returns the model's raw text.
+    Returns {"kind": "actionable"|"opinion"|"ambiguous", "task": str?, "question": str?}.
+    Robust: if call_llm output can't be parsed into a valid kind, return
+    {"kind":"ambiguous","question":"你是要现在就开始做吗?"} (fail safe — never guess 'actionable').
+    """
+    try:
+        parsed = _parse_json_object(call_llm(_build_prompt(text, context)))
+    except Exception:
+        return _safe_ambiguous()
+    if not parsed:
+        return _safe_ambiguous()
+
+    kind = parsed.get("kind")
+    if kind not in _VALID_KINDS:
+        return _safe_ambiguous()
+    if kind == "actionable":
+        task = (parsed.get("task") or text or "").strip()
+        return {"kind": "actionable", "task": task}
+    if kind == "ambiguous":
+        question = (parsed.get("question") or _DEFAULT_QUESTION).strip()
+        return {"kind": "ambiguous", "question": question or _DEFAULT_QUESTION}
+    return {"kind": "opinion"}
+
+
+def default_call_llm(prompt):
+    """Spawn a headless model and return its stdout."""
+    return subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+
+
+def default_judge(text, context):
+    return classify(text, context, default_call_llm)
