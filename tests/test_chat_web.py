@@ -361,6 +361,12 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
 
+    def test_index_only_rerenders_log_on_change(self):
+        # the poll must not rebuild the message DOM every tick (that wipes text selection);
+        # it tracks the last-rendered signature and only re-renders when messages change
+        page = self._get("/")
+        self.assertIn("lastRender", page)
+
     def test_index_guards_enter_send_for_ime_composition(self):
         page = self._get("/")
 

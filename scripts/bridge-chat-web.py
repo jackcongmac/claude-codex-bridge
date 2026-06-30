@@ -272,6 +272,7 @@ button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
 const msg=document.getElementById('msg'),AT=document.getElementById('at');
 const PEOPLE=[['Claude','@Claude '],['Codex','@Codex '],['所有人','@All ']];
+let lastRender='';
 function showAt(){const m=msg.value.match(/@(\\S*)$/);
   if(!m){AT.style.display='none';return;}
   AT.innerHTML=PEOPLE.map((p,i)=>`<div data-i=${i}>@${p[0]}</div>`).join('');
@@ -285,14 +286,18 @@ async function load(){
   let ms; try{ms=await (await fetch('/messages')).json();}catch(e){return;}
   let st={typing:[],responders:[]}; try{st=await (await fetch('/status')).json();}catch(e){}
   const log=document.getElementById('log');
-  const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
-  log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div><div class=time></div></div></div>`).join('');
-  const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble'),tms=log.querySelectorAll('.time');
-  ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);
-    if(m.img){const im=document.createElement('img');im.className='cimg';im.src='/uploads/'+m.img;im.onclick=()=>window.open(im.src);bubs[i].appendChild(im);}});
+  const sig=JSON.stringify(ms);
+  if(sig!==lastRender){
+    lastRender=sig;
+    const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
+    log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div><div class=time></div></div></div>`).join('');
+    const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble'),tms=log.querySelectorAll('.time');
+    ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);
+      if(m.img){const im=document.createElement('img');im.className='cimg';im.src='/uploads/'+m.img;im.onclick=()=>window.open(im.src);bubs[i].appendChild(im);}});
+    if(atBottom)log.scrollTop=log.scrollHeight;
+  }
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
   document.getElementById('presence').textContent=(st.responders||[]).map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
-  if(atBottom)log.scrollTop=log.scrollHeight;
 }
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
