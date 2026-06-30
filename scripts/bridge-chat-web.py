@@ -277,7 +277,7 @@ def participant_liveness(project, now=None):
     return out
 
 
-_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>群聊</title><style>
+_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Group chat</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
 #close{cursor:pointer;font-size:20px;color:#bbb}#close:hover{color:#fff}
@@ -290,26 +290,28 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-cont
 .me .bubble{background:#95ec69}
 .time{font-size:10px;color:#b2b2b2;margin:2px 8px 0}.me .time{text-align:right}
 .cimg{max-width:220px;max-height:220px;border-radius:6px;display:block;margin-top:4px;cursor:zoom-in}
-body.drag:after{content:"松手发送图片";position:fixed;inset:0;background:rgba(7,193,96,.12);border:3px dashed #07c160;display:flex;align-items:center;justify-content:center;font-size:20px;color:#07820;pointer-events:none;z-index:99}
+body.drag:after{content:"Drop to send image";position:fixed;inset:0;background:rgba(7,193,96,.12);border:3px dashed #07c160;display:flex;align-items:center;justify-content:center;font-size:20px;color:#07820;pointer-events:none;z-index:99}
 footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;position:relative}
 #at{position:absolute;bottom:100%;left:8px;margin-bottom:4px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;z-index:10;min-width:140px}
-#at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}
+#at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}#at div.sel{background:#eef}
 #msg{flex:1;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:15px}
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
 </style></head><body>
-<header><b>群聊 · __SELF__</b><span id=close title=关闭>✕</span></header>
+<header><b>Group chat · __SELF__</b><span id=close title=Close>✕</span></header>
 <div id=log></div>
 <div id=typing></div>
 <div id=presence></div>
-<footer><div id=at></div><input id=msg placeholder="说点什么…(打 @ 选人)" autofocus><button id=send>发送</button></footer>
+<footer><div id=at></div><input id=msg placeholder="Type a message…  (@ to mention)" autofocus><button id=send>Send</button></footer>
 <script>
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
 const msg=document.getElementById('msg'),AT=document.getElementById('at');
-const PEOPLE=[['Claude','@Claude '],['Codex','@Codex '],['所有人','@All ']];
-let lastRender='';
+const PEOPLE=[['Claude','@Claude '],['Codex','@Codex '],['All','@All ']];
+let lastRender='',atSel=0;
+function styleAt(){AT.querySelectorAll('div[data-i]').forEach((d,i)=>d.classList.toggle('sel',i===atSel));}
 function showAt(){const m=msg.value.match(/@(\\S*)$/);
   if(!m){AT.style.display='none';return;}
-  AT.innerHTML=PEOPLE.map((p,i)=>`<div data-i=${i}>@${p[0]}</div>`).join('');
+  atSel=0;
+  AT.innerHTML=PEOPLE.map((p,i)=>`<div data-i=${i} class="${i===atSel?'sel':''}">@${p[0]}</div>`).join('');
   AT.style.display='block';}
 AT.addEventListener('mousedown',e=>{const d=e.target.closest('div[data-i]');if(!d)return;e.preventDefault();
   msg.value=msg.value.replace(/@\\S*$/,PEOPLE[+d.dataset.i][1]);AT.style.display='none';msg.focus();});
@@ -330,9 +332,9 @@ async function load(){
       if(m.img){const im=document.createElement('img');im.className='cimg';im.src='/uploads/'+m.img;im.onclick=()=>window.open(im.src);bubs[i].appendChild(im);}});
     if(atBottom)log.scrollTop=log.scrollHeight;
   }
-  document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
+  document.getElementById('typing').textContent=st.typing.length?`${st.typing.join(', ')} thinking…`:'';
   const presence=st.presence||st.responders||[];
-  document.getElementById('presence').textContent=presence.map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
+  document.getElementById('presence').textContent=presence.map(r=>`${r.name}:${r.alive?'online':'offline'}`).join(' · ');
 }
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
@@ -340,11 +342,18 @@ async function send(trigger){const t=document.getElementById('msg');const v=t.va
   t.value='';
   const body=JSON.stringify({text:v,sent_at:nowStamp(),send_trigger:trigger||'click'});
   try{const r=await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},body});
-    const j=await r.json(); if(!j.ok){t.value=v; alert('发送失败,请重试');}}catch(e){t.value=v;}
+    const j=await r.json(); if(!j.ok){t.value=v; alert('Send failed, please retry');}}catch(e){t.value=v;}
   load();}
 document.getElementById('send').onclick=()=>send('click');
 let lastEnterAt=0;
 document.getElementById('msg').addEventListener('keydown',e=>{
+  if(AT.style.display==='block'){
+    if(e.key==='ArrowDown'){atSel=(atSel+1)%PEOPLE.length;styleAt();e.preventDefault();return;}
+    if(e.key==='ArrowUp'){atSel=(atSel-1+PEOPLE.length)%PEOPLE.length;styleAt();e.preventDefault();return;}
+    if(e.key==='Enter'||e.key==='Tab'){msg.value=msg.value.replace(/@\\S*$/,PEOPLE[atSel][1]);AT.style.display='none';msg.focus();e.preventDefault();return;}
+    if(e.key==='Escape'){AT.style.display='none';e.preventDefault();return;}
+    return;
+  }
   if(e.key!=='Enter'||e.shiftKey)return;
   const composing=e.isComposing||e.keyCode===229;
   const now=Date.now();
@@ -357,7 +366,7 @@ async function uploadImage(file){
   try{const r=await fetch('/upload',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Token':TOKEN},body:file});
     const j=await r.json();return j.ok?j.id:null;}catch(e){return null;}}
 async function sendImage(file,trigger){const id=await uploadImage(file);
-  if(!id){alert('图片上传失败(只支持 png/jpg/gif/webp,≤10MB)');return;}
+  if(!id){alert('Image upload failed (png/jpg/gif/webp, ≤10MB only)');return;}
   try{await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},
     body:JSON.stringify({text:'',img:id,sent_at:nowStamp(),send_trigger:trigger||'drop'})});}catch(e){}
   load();}
@@ -371,9 +380,9 @@ document.addEventListener('paste',e=>{const items=[...((e.clipboardData&&e.clipb
   imageFilesFrom(files).forEach(f=>sendImage(f,'paste'));});
 document.getElementById('close').onclick=async()=>{let p=null;
   try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});const j=await r.json();
-    if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('关闭失败,请重试');return;}
-  document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">群聊已关闭。<span id=ar></span><br>可以关掉这个标签页。</p>';
-  if(p)document.getElementById('ar').textContent=' 本次记录已存到:'+p;};
+    if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('Close failed, please retry');return;}
+  document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">Group chat closed.<span id=ar></span><br>You can close this tab.</p>';
+  if(p)document.getElementById('ar').textContent=' This session was archived to: '+p;};
 load();setInterval(load,1500);
 </script></body></html>"""
 

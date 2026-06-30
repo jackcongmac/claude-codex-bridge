@@ -381,6 +381,43 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
 
+    def test_index_uses_english_public_ui(self):
+        page = self._get("/")
+
+        self.assertIn("<title>Group chat</title>", page)
+        self.assertIn("Group chat · Jack", page)
+        self.assertIn("title=Close", page)
+        self.assertIn("Type a message", page)
+        self.assertIn(">Send</button>", page)
+        self.assertIn("@All", page)
+        self.assertIn("thinking", page)
+        self.assertIn("online", page)
+        self.assertIn("offline", page)
+        self.assertIn("Send failed, please retry", page)
+        self.assertIn("Close failed, please retry", page)
+        self.assertIn("Image upload failed", page)
+        self.assertIn("Group chat closed.", page)
+        self.assertIn("You can close this tab.", page)
+        self.assertIn("This session was archived to:", page)
+        self.assertIn('content:"Drop to send image"', page)
+        self.assertNotIn("群聊", page)
+        self.assertNotIn("发送", page)
+        self.assertNotIn("说点什么", page)
+        self.assertNotIn("正在思考", page)
+        self.assertNotIn("在线", page)
+        self.assertNotIn("离线", page)
+        self.assertNotIn("图片上传失败", page)
+        self.assertNotIn("松手发送图片", page)
+
+    def test_index_wires_at_mention_keyboard_navigation(self):
+        page = self._get("/")
+
+        self.assertIn("atSel", page)
+        self.assertIn("ArrowDown", page)
+        self.assertIn("ArrowUp", page)
+        self.assertIn("Escape", page)
+        self.assertIn("PEOPLE[atSel][1]", page)
+
     def test_index_only_rerenders_log_on_change(self):
         # the poll must not rebuild the message DOM every tick (that wipes text selection);
         # it tracks the last-rendered signature and only re-renders when messages change
