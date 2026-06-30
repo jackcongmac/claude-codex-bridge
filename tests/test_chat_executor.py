@@ -84,5 +84,41 @@ class RolesWiringTests(unittest.TestCase):
         self.assertNotEqual(impl, rev)      # implementer is the other side
         self.assertNotEqual(impl, "")       # and is concrete
 
+class ParseVerdictTests(unittest.TestCase):
+    def test_parses_go_with_reason(self):
+        v, note = ex._parse_verdict("blah blah\nVERDICT: GO looks clean and tests pass")
+        self.assertEqual(v, "GO")
+        self.assertIn("looks clean", note)
+
+    def test_parses_fix_first(self):
+        v, note = ex._parse_verdict("VERDICT: FIX-FIRST missing a test")
+        self.assertEqual(v, "FIX-FIRST")
+
+    def test_missing_verdict_fails_safe_to_fix_first(self):
+        v, note = ex._parse_verdict("I reviewed it, looks fine to me")
+        self.assertEqual(v, "FIX-FIRST")
+
+    def test_last_verdict_line_wins(self):
+        v, note = ex._parse_verdict(
+            "I briefly thought VERDICT: GO but on reflection\nVERDICT: FIX-FIRST needs a test")
+        self.assertEqual(v, "FIX-FIRST")
+        self.assertIn("needs a test", note)
+
+
+class DefaultReviewRecordTests(unittest.TestCase):
+    def test_records_parsed_verdict_to_the_ledger(self):
+        import json
+        import _review
+        d = tempfile.mkdtemp()
+        os.mkdir(os.path.join(d, ".collab"))
+        me = _review._detected_recorder("Claude")   # match THIS env so record() succeeds
+        with open(os.path.join(d, ".collab", "roles.json"), "w") as f:
+            json.dump({"human": "Jack", "lead": me}, f)
+        v = ex.default_review(d, "deadbeefcafe1234",
+                              call_llm=lambda prompt, root: "reasoning here\nVERDICT: GO clean")
+        self.assertEqual(v["verdict"], "GO")
+        self.assertIn("clean", v.get("note", ""))
+
+
 if __name__ == "__main__":
     unittest.main()

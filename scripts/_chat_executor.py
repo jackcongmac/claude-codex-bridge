@@ -3,6 +3,7 @@
 out to codex exec / a headless reviewer / bridge-push.sh). The bridge-push review gate is
 the hard safety backstop — unreviewed code cannot reach origin even if this misbehaves."""
 import os
+import re
 import subprocess
 import sys
 
@@ -72,18 +73,40 @@ def default_implement(project, task, findings):
             "test_summary": "see codex output"}
 
 
-def default_review(project, head_sha):
+def _parse_verdict(text):
+    """Extract the reviewer's FINAL 'VERDICT: GO|FIX-FIRST <reason>' line — the LAST one wins, so
+    a verdict mentioned mid-reasoning doesn't count. Fail SAFE: no parseable verdict -> FIX-FIRST
+    (never auto-approve on ambiguity)."""
+    matches = re.findall(r"VERDICT:\s*(GO|FIX-FIRST)\b[ \t]*([^\n]*)", text or "", re.I)
+    if not matches:
+        return ("FIX-FIRST", "no parseable verdict from reviewer")
+    kind, note = matches[-1]
+    return (kind.upper(), note.strip())
+
+
+def _review_call_llm(prompt, root):
+    return subprocess.run(["claude", "-p", prompt], cwd=root,
+                          capture_output=True, text=True, timeout=900).stdout or ""
+
+
+def default_review(project, head_sha, call_llm=None):
     root = find_project_root(project)
+    _implementer, reviewer = _roles_for(root)
     prompt = (
-        "Review the change at HEAD (%s) for spec compliance, code quality, and that its tests "
-        "pass. Then record your verdict by running EXACTLY one of:\n"
-        "  scripts/bridge-review.sh --self <you> --sha %s --verdict GO --note '<finding>'\n"
-        "  scripts/bridge-review.sh --self <you> --sha %s --verdict FIX-FIRST --note '<finding>'\n"
-        "Use GO only if genuinely correct and green." % (head_sha, head_sha, head_sha))
-    subprocess.run(["claude", "-p", prompt], cwd=root,
-                   capture_output=True, text=True, timeout=900)
-    # read the verdict back from the ledger (source of truth, not the agent's stdout)
-    from _review import latest_verdict   # added in Task 3
+        "You are %s, the code reviewer. Inspect the git commit at HEAD (%s) in this repo "
+        "(run `git show %s` and run the relevant tests) for correctness, spec compliance, code "
+        "quality, and that its tests pass. Give brief reasoning, then end with EXACTLY one final "
+        "line and nothing after it:\n"
+        "VERDICT: GO <one-line reason>          (only if genuinely correct and tests pass)\n"
+        "VERDICT: FIX-FIRST <one-line reason>   (otherwise)"
+        % (reviewer, head_sha, head_sha))
+    out = (call_llm or _review_call_llm)(prompt, root)
+    verdict, note = _parse_verdict(out)
+    # The reviewing agent IS the lead — the same identity as this orchestrator — so recording
+    # the verdict here is the lead recording its own review (recorded_by matches reviewer; not
+    # cross-identity forgery). The bridge-push gate remains the independent backstop.
+    from _review import record, latest_verdict
+    record(root, reviewer, head_sha, verdict, note=note or "auto-review")
     return latest_verdict(root, head_sha)
 
 
