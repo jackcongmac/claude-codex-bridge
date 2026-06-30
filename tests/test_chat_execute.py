@@ -86,5 +86,30 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(st, "noop")
         self.assertEqual(self.events, [])
 
+class ReportTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.mkdir(os.path.join(self.tmp, ".collab"))
+        self.posts = []
+
+    def _issues(self):
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            return f.read()
+
+    def test_success_posts_and_logs_commit(self):
+        ce.report(self.tmp, "做 ④ 英文化",
+                  {"ok": True, "summary": "英文化完成", "commit": "abc1234"},
+                  self.posts.append)
+        self.assertTrue(any("✅" in p and "abc1234" in p for p in self.posts))
+        log = self._issues()
+        self.assertIn("## 执行记录", log)
+        self.assertIn("做 ④ 英文化", log)
+        self.assertIn("abc1234", log)
+
+    def test_failure_posts_and_logs_reason(self):
+        ce.report(self.tmp, "做 X", {"ok": False, "summary": "测试没过"}, self.posts.append)
+        self.assertTrue(any("❌" in p and "测试没过" in p for p in self.posts))
+        self.assertIn("测试没过", self._issues())
+
 if __name__ == "__main__":
     unittest.main()

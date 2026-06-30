@@ -51,3 +51,33 @@ def dispatch(project, decision, poster, enqueue):
         poster(decision.get("question") or "你是要现在就开始做吗?")
         return "asked"
     return "noop"
+
+
+def _issues_path(project):
+    return os.path.join(collab_paths(find_project_root(project))["dir"], "ISSUES.md")
+
+
+def report(project, task, result, poster):
+    ok = bool(result.get("ok"))
+    summary = result.get("summary") or ""
+    commit = result.get("commit") or ""
+    if ok:
+        line = "✅ 完成:%s%s" % (task, ("(commit %s)" % commit) if commit else "")
+    else:
+        line = "❌ 失败:%s — %s" % (task, summary)
+    poster(line)
+
+    path = _issues_path(project)
+    try:
+        with open(path) as f:
+            body = f.read()
+    except OSError:
+        body = ""
+    if "## 执行记录" not in body:
+        body = body.rstrip() + "\n\n## 执行记录\n" if body else "## 执行记录\n"
+    row = "- [%s] %s — %s%s%s\n" % (
+        now_str()[:16], task, ("成功" if ok else "失败"),
+        (" · " + summary) if summary else "",
+        (" · commit " + commit) if commit else "")
+    with open(path, "w") as f:
+        f.write(body.rstrip() + "\n" + row)
