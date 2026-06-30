@@ -2,13 +2,23 @@
 gated, reported execution decision. LLM judgment and the write-capable executor are
 injected boundaries (see execute_once). Safe: gated behind BRIDGE_CHAT_EXECUTE=1."""
 import argparse
+import hashlib
 import importlib.util as _ilu
 import os
 import re
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from bridge_common import collab_paths, find_project_root, now_str  # noqa: E402
+from bridge_common import (  # noqa: E402
+    acquire_lock,
+    atomic_write_json,
+    collab_paths,
+    find_project_root,
+    now_str,
+    read_json,
+    release_lock,
+)
 import _chat_roles  # noqa: E402
 from _post import post as _board_post   # noqa: E402
 import _chat_executor  # noqa: E402
@@ -69,34 +79,122 @@ def _execute_state_path(project):
                         "chat_execute_state.json")
 
 
-def _load_handled(project):
+def _execute_lock_path(project):
+    return os.path.join(collab_paths(find_project_root(project))["dir"],
+                        "chat_execute_state.lock")
+
+
+_STATE_LIMIT = 500
+_VALID_MSG_STATES = {"claimed", "running", "done"}
+
+
+def _normalize_state(data):
+    messages = {}
+    if isinstance(data, dict) and isinstance(data.get("handled"), list):
+        for mid in data.get("handled", []):
+            if isinstance(mid, str) and mid not in messages:
+                messages[mid] = {"state": "done", "at": ""}
+        return {"version": 2, "messages": messages}
+
+    if isinstance(data, dict) and isinstance(data.get("messages"), dict):
+        for mid, entry in data.get("messages", {}).items():
+            if not isinstance(mid, str):
+                continue
+            if isinstance(entry, dict):
+                state = entry.get("state")
+                at = entry.get("at", "")
+            else:
+                state = entry
+                at = ""
+            if state in _VALID_MSG_STATES:
+                messages[mid] = {"state": state, "at": at if isinstance(at, str) else ""}
+        return {"version": 2, "messages": messages}
+
+    return {"version": 2, "messages": {}}
+
+
+def _load_state(project):
     try:
-        import json
-        with open(_execute_state_path(project)) as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        return []
-    ids = data.get("handled", [])
-    return ids if isinstance(ids, list) else []
+        data = read_json(_execute_state_path(project), default={}) or {}
+    except RuntimeError:
+        data = {}
+    return _normalize_state(data)
+
+
+def _prune_state(state):
+    messages = state.setdefault("messages", {})
+    while len(messages) > _STATE_LIMIT:
+        messages.pop(next(iter(messages)))
+    state["version"] = 2
+    return state
+
+
+def _write_state(project, state):
+    atomic_write_json(_execute_state_path(project), _prune_state(state))
+
+
+def _set_state(project, mid, state):
+    data = _load_state(project)
+    data.setdefault("messages", {})[mid] = {"state": state, "at": now_str()}
+    _write_state(project, data)
+
+
+def _msg_state(project, mid):
+    return (_load_state(project).get("messages", {}).get(mid) or {}).get("state")
+
+
+def _load_handled(project):
+    data = _load_state(project)
+    return [mid for mid, entry in data.get("messages", {}).items()
+            if entry.get("state") == "done"]
 
 
 def _mark_handled(project, mid):
-    import json, os as _os
-    handled = _load_handled(project)
-    if mid in handled:
-        return
-    handled.append(mid)
-    handled = handled[-500:]
-    p = _execute_state_path(project)
-    tmp = p + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"handled": handled}, f)
-    _os.replace(tmp, p)
+    _set_state(project, mid, "done")
 
 
 def _msg_key(msg):
-    return msg.get("_id") or ("%s|%s|%s" % (
-        msg.get("ts", ""), msg.get("speaker", ""), msg.get("text", "")))[:80]
+    if msg.get("_id"):
+        return msg["_id"]
+    try:
+        dup = int(msg.get("_dup", 0) or 0)
+    except (TypeError, ValueError):
+        dup = 0
+    raw = "%s|%s|%s|%d" % (
+        msg.get("ts", ""), msg.get("speaker", ""), msg.get("text", ""), dup)
+    return "h:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+
+def _claim_next_message(project, msgs):
+    run_id = "chat-execute-%s-%s" % (os.getpid(), uuid.uuid4().hex)
+    lock_path = _execute_lock_path(project)
+    if not acquire_lock(lock_path, run_id, ttl=30, wait=3):
+        return "busy", None, None, []
+    try:
+        state = _load_state(project)
+        messages = state.setdefault("messages", {})
+        warnings = []
+        changed = False
+        for idx, msg in enumerate(msgs):
+            if not _chat_roles.is_human(msg.get("speaker", ""), project):
+                continue
+            mid = _msg_key(msg)
+            cur = (messages.get(mid) or {}).get("state")
+            if cur in (None, "claimed"):
+                messages[mid] = {"state": "claimed", "at": now_str()}
+                _write_state(project, state)
+                return "claimed", idx, msg, warnings
+            if cur == "running":
+                warnings.append(
+                    "⚠️ 上一个任务执行中断,需要你确认是否已完成/是否重跑:%s"
+                    % msg.get("text", ""))
+                messages[mid] = {"state": "done", "at": now_str()}
+                changed = True
+        if changed:
+            _write_state(project, state)
+        return "none", None, None, warnings
+    finally:
+        release_lock(lock_path, run_id)
 
 
 def report(project, task, result, poster):
@@ -162,23 +260,23 @@ def execute_once(project, judge=None, executor=None, poster=None):
         collab_paths(find_project_root(project))["board"], "Chat"))
     if not msgs:
         return "empty"
-    handled = set(_load_handled(project))
-    selected_idx = None
-    selected = None
-    for idx, msg in enumerate(msgs):
-        if _chat_roles.is_human(msg.get("speaker", ""), project) and _msg_key(msg) not in handled:
-            selected_idx = idx
-            selected = msg
-            break
-    if selected is None:
-        return "none"
-    mid = _msg_key(selected)
     if poster is None:
         lead = _poster_speaker(project)
         fmt = _format_chat_fn()
         poster = lambda text: _board_post(project, lead, fmt(lead, text), section="Chat")
+
+    claim, selected_idx, selected, warnings = _claim_next_message(project, msgs)
+    if claim == "busy":
+        return "busy"
+    for warning in warnings:
+        poster(warning)
+    if selected is None:
+        return "none"
+
+    mid = _msg_key(selected)
     decision = decide(project, msgs[:selected_idx + 1], judge)
-    _mark_handled(project, mid)
+    if decision.get("action") != "execute":
+        _set_state(project, mid, "done")
 
     captured = {}
     def _enqueue(task):
@@ -187,8 +285,10 @@ def execute_once(project, judge=None, executor=None, poster=None):
     if st != "acked-enqueued":
         return {"asked": "asked", "requested-greenlight": "requested-greenlight",
                 "noop": "ignore"}.get(st, "none")
+    _set_state(project, mid, "running")
     result = executor(captured["task"], project)
     report(project, captured["task"], result, poster)
+    _set_state(project, mid, "done")
     return "done"
 
 

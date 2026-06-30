@@ -297,6 +297,137 @@ class ExecuteOnceTests(unittest.TestCase):
         self.assertEqual(st, "done")
         self.assertIn("greenlight-2", ce._load_handled(self.tmp))
 
+    def test_executor_crash_after_running_is_not_rerun_and_surfaces_once(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:crashy-task -->\n"
+                "**Jack:** ship the small safe fix\n")
+
+        calls = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            def boom(task, project):
+                calls.append(task)
+                raise RuntimeError("executor crashed after start")
+
+            with self.assertRaises(RuntimeError):
+                ce.execute_once(
+                    self.tmp,
+                    judge=lambda t, c: {"kind": "actionable", "task": "safe fix"},
+                    executor=boom,
+                    poster=self.posts.append)
+
+            self.assertEqual(calls, ["safe fix"])
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "must not rerun"},
+                executor=lambda task, project: self.fail("running task must not be rerun"),
+                poster=self.posts.append)
+            self.assertEqual(st, "none")
+            warnings = [p for p in self.posts if "上一个任务执行中断" in p]
+            self.assertEqual(len(warnings), 1)
+            self.assertIn("ship the small safe fix", warnings[0])
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "must not rerun"},
+                executor=lambda task, project: self.fail("running task must not be rerun"),
+                poster=self.posts.append)
+            self.assertEqual(st, "none")
+            warnings = [p for p in self.posts if "上一个任务执行中断" in p]
+            self.assertEqual(len(warnings), 1)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["messages"]["crashy-task"]["state"], "done")
+
+    def test_claimed_message_is_repicked_after_decision_crash_before_executor(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:claimed-before-run -->\n"
+                "**Jack:** do a retryable task\n")
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            with self.assertRaises(RuntimeError):
+                ce.execute_once(
+                    self.tmp,
+                    judge=lambda t, c: (_ for _ in ()).throw(RuntimeError("judge crashed")),
+                    executor=lambda task, project: self.fail("executor must not start"),
+                    poster=self.posts.append)
+
+            with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
+                state = json.load(f)
+            self.assertEqual(state["messages"]["claimed-before-run"]["state"], "claimed")
+
+            calls = []
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "retryable task"},
+                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(calls, ["retryable task"])
+        self.assertIn("claimed-before-run", ce._load_handled(self.tmp))
+
+    def test_claim_lock_contention_returns_busy_without_executing(self):
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        original_acquire = getattr(ce, "acquire_lock", None)
+        original_release = getattr(ce, "release_lock", None)
+        ce.acquire_lock = lambda *args, **kwargs: False
+        ce.release_lock = lambda *args, **kwargs: self.fail("must not release an unheld lock")
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "should not execute"},
+                executor=lambda task, project: self.fail("executor must not run when busy"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+            if original_acquire is None:
+                del ce.acquire_lock
+            else:
+                ce.acquire_lock = original_acquire
+            if original_release is None:
+                del ce.release_lock
+            else:
+                ce.release_lock = original_release
+
+        self.assertEqual(st, "busy")
+        self.assertEqual(self.posts, [])
+
+    def test_second_pass_after_done_does_not_double_execute(self):
+        calls = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "single run"},
+                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+            self.assertEqual(st, "done")
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "single run"},
+                executor=lambda task, project: self.fail("done task must not run twice"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "none")
+        self.assertEqual(calls, ["single run"])
+
     def test_mark_handled_is_idempotent_and_bounded(self):
         ce._mark_handled(self.tmp, "same-id")
         ce._mark_handled(self.tmp, "same-id")
@@ -307,6 +438,37 @@ class ExecuteOnceTests(unittest.TestCase):
         handled = ce._load_handled(self.tmp)
         self.assertLessEqual(len(handled), 500)
         self.assertEqual(handled[-1], "id-599")
+
+    def test_state_messages_map_is_bounded_to_recent_keys(self):
+        for i in range(600):
+            ce._mark_handled(self.tmp, "id-%03d" % i)
+
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["version"], 2)
+        self.assertLessEqual(len(state["messages"]), 500)
+        self.assertNotIn("id-000", state["messages"])
+        self.assertIn("id-599", state["messages"])
+
+class MsgKeyTests(unittest.TestCase):
+    def test_id_bearing_message_key_is_unchanged(self):
+        self.assertEqual(
+            ce._msg_key({"_id": "abc123def456", "ts": "t", "speaker": "Jack", "text": "ignored"}),
+            "abc123def456")
+
+    def test_no_id_long_messages_with_same_prefix_have_distinct_keys(self):
+        common = "x" * 80
+        a = ce._msg_key({"ts": "2026", "speaker": "Jack", "text": common + "A"})
+        b = ce._msg_key({"ts": "2026", "speaker": "Jack", "text": common + "B"})
+        self.assertNotEqual(a, b)
+        self.assertTrue(a.startswith("h:"))
+        self.assertTrue(b.startswith("h:"))
+
+    def test_no_id_duplicate_messages_use_dup_disambiguator(self):
+        base = {"ts": "2026", "speaker": "Jack", "text": "same text"}
+        self.assertNotEqual(
+            ce._msg_key({**base, "_dup": 0}),
+            ce._msg_key({**base, "_dup": 1}))
 
 class DefaultPosterTests(unittest.TestCase):
     def setUp(self):
