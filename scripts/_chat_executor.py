@@ -89,21 +89,37 @@ def _review_call_llm(prompt, root):
                           capture_output=True, text=True, timeout=900).stdout or ""
 
 
-def default_review(project, head_sha, call_llm=None):
+def _run_tests(root):
+    """Run the project's suite; return True iff green. The headless reviewer agent can't execute
+    tests in its session, so the ORCHESTRATOR runs them and treats RED as a hard FIX-FIRST — failing
+    tests can never be autonomously pushed regardless of what the LLM reviewer says."""
+    try:
+        r = subprocess.run(["python3", "-m", "unittest", "discover", "-s", "tests", "-q"],
+                           cwd=root, capture_output=True, text=True, timeout=600)
+        return r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def default_review(project, head_sha, call_llm=None, run_tests=None):
     root = find_project_root(project)
     _implementer, reviewer = _roles_for(root)
+    tests_ok = (run_tests or _run_tests)(root)
     prompt = (
         "You are %s, the code reviewer. Inspect the git commit at HEAD (%s) in this repo "
-        "(run `git show %s` and run the relevant tests) for correctness, spec compliance, code "
-        "quality, and that its tests pass. Give brief reasoning, then end with EXACTLY one final "
+        "(run `git show %s`) for correctness, spec compliance, and code quality. The automated "
+        "test suite was just run and it %s. Give brief reasoning, then end with EXACTLY one final "
         "line and nothing after it:\n"
-        "VERDICT: GO <one-line reason>          (only if genuinely correct and tests pass)\n"
+        "VERDICT: GO <one-line reason>          (only if genuinely correct AND tests passed)\n"
         "VERDICT: FIX-FIRST <one-line reason>   (otherwise)"
-        % (reviewer, head_sha, head_sha))
+        % (reviewer, head_sha, head_sha, ("PASSED" if tests_ok else "FAILED")))
     out = (call_llm or _review_call_llm)(prompt, root)
     verdict, note = _parse_verdict(out)
-    # The reviewing agent IS the lead — the same identity as this orchestrator — so recording
-    # the verdict here is the lead recording its own review (recorded_by matches reviewer; not
+    if not tests_ok:
+        verdict = "FIX-FIRST"                                   # red tests never auto-GO
+        note = ("automated tests FAILED — " + note).strip()
+    # The reviewing agent IS the lead — same identity as this orchestrator — so recording the
+    # verdict here is the lead recording its own review (recorded_by matches reviewer; not
     # cross-identity forgery). The bridge-push gate remains the independent backstop.
     from _review import record, latest_verdict
     record(root, reviewer, head_sha, verdict, note=note or "auto-review")

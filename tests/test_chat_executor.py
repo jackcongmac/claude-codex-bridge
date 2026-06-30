@@ -106,7 +106,7 @@ class ParseVerdictTests(unittest.TestCase):
 
 
 class DefaultReviewRecordTests(unittest.TestCase):
-    def test_records_parsed_verdict_to_the_ledger(self):
+    def _proj(self):
         import json
         import _review
         d = tempfile.mkdtemp()
@@ -114,10 +114,27 @@ class DefaultReviewRecordTests(unittest.TestCase):
         me = _review._detected_recorder("Claude")   # match THIS env so record() succeeds
         with open(os.path.join(d, ".collab", "roles.json"), "w") as f:
             json.dump({"human": "Jack", "lead": me}, f)
-        v = ex.default_review(d, "deadbeefcafe1234",
-                              call_llm=lambda prompt, root: "reasoning here\nVERDICT: GO clean")
+        return d
+
+    def test_records_parsed_verdict_to_the_ledger(self):
+        v = ex.default_review(self._proj(), "deadbeefcafe1234",
+                              call_llm=lambda prompt, root: "reasoning here\nVERDICT: GO clean",
+                              run_tests=lambda root: True)
         self.assertEqual(v["verdict"], "GO")
         self.assertIn("clean", v.get("note", ""))
+
+    def test_failing_tests_force_fix_first_even_if_llm_says_go(self):
+        v = ex.default_review(self._proj(), "deadbeefcafe5678",
+                              call_llm=lambda prompt, root: "VERDICT: GO looks fine to me",
+                              run_tests=lambda root: False)
+        self.assertEqual(v["verdict"], "FIX-FIRST")   # red tests override an LLM GO
+        self.assertIn("test", v.get("note", "").lower())
+
+    def test_passing_tests_with_go_records_go(self):
+        v = ex.default_review(self._proj(), "deadbeefcafe9012",
+                              call_llm=lambda prompt, root: "VERDICT: GO clean",
+                              run_tests=lambda root: True)
+        self.assertEqual(v["verdict"], "GO")
 
 
 if __name__ == "__main__":
