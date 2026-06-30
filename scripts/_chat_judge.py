@@ -11,6 +11,10 @@ def is_actionable(verdict):
     return verdict.get('kind') == 'actionable'
 
 
+def is_ambiguous(verdict):
+    return verdict.get('kind') == 'ambiguous'
+
+
 def _safe_ambiguous():
     return {"kind": "ambiguous", "question": _DEFAULT_QUESTION}
 

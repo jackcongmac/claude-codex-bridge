@@ -11,6 +11,10 @@ class ChatJudgeTests(unittest.TestCase):
         self.assertIs(judge.is_actionable({"kind": "actionable"}), True)
         self.assertIs(judge.is_actionable({"kind": "opinion"}), False)
 
+    def test_is_ambiguous_identifies_ambiguous_verdicts(self):
+        self.assertIs(judge.is_ambiguous({"kind": "ambiguous"}), True)
+        self.assertIs(judge.is_ambiguous({"kind": "actionable"}), False)
+
     def test_clean_json_actionable_extracts_task(self):
         out = judge.classify(
             "把登录错误修一下",
