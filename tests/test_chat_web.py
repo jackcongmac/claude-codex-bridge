@@ -124,6 +124,29 @@ class ParseChatTests(unittest.TestCase):
         self.assertIsNone(msgs[0].get("sent_at"))
         self.assertIsNone(msgs[0].get("send_trigger"))
 
+    def test_format_chat_message_embeds_image_ref(self):
+        body = cw.format_chat_message("Jack", "", msg_id="m1", img="a1b2c3d4e5f6.png")
+        self.assertIn("chat-id:m1", body)
+        self.assertIn("img:a1b2c3d4e5f6.png", body)
+
+    def test_parse_chat_extracts_image_ref(self):
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            "<!-- chat-id:m1 img:a1b2c3d4e5f6.png -->\n**Jack:** look\n")
+        msgs = cw.parse_chat(section)
+        self.assertEqual(msgs[0]["img"], "a1b2c3d4e5f6.png")
+        self.assertEqual(msgs[0]["text"], "look")
+
+    def test_parse_chat_drops_malformed_image_ref(self):
+        # an image ref that isn't a safe <hex>.<ext> must not survive parsing
+        section = (
+            "## Chat\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n"
+            "<!-- chat-id:m1 img:../etc/passwd -->\n**Jack:** x\n")
+        msgs = cw.parse_chat(section)
+        self.assertIsNone(msgs[0].get("img"))
+
 
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
@@ -209,6 +232,53 @@ class ServerRoundTripTests(unittest.TestCase):
     def test_index_renders_message_time(self):
         page = self._get("/")
         self.assertIn("class=time", page)
+
+    _PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 32)
+
+    def _post_bytes(self, path, raw, ctype, token=True):
+        headers = {"Content-Type": ctype}
+        if token:
+            headers["X-Token"] = self.httpd.token
+        req = urllib.request.Request(self.base + path, data=raw, headers=headers)
+        return urllib.request.urlopen(req, timeout=5)
+
+    def test_upload_then_serve_roundtrip(self):
+        resp = json.loads(self._post_bytes("/upload", self._PNG, "image/png").read().decode())
+        self.assertTrue(resp["ok"])
+        ref = resp["id"]
+        self.assertRegex(ref, r"^[0-9a-f]{8,}\.png$")
+        served = self._post_bytes  # noqa
+        got = urllib.request.urlopen(self.base + "/uploads/" + ref, timeout=5)
+        self.assertEqual(got.read(), self._PNG)
+        self.assertEqual(got.headers.get("Content-Type").split(";")[0], "image/png")
+
+    def test_upload_without_token_is_forbidden(self):
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            self._post_bytes("/upload", self._PNG, "image/png", token=False)
+        self.assertEqual(cm.exception.code, 403)
+
+    def test_upload_rejects_non_image(self):
+        resp = json.loads(
+            self._post_bytes("/upload", b"<script>not an image", "image/png").read().decode())
+        self.assertFalse(resp["ok"])
+
+    def test_serve_unknown_or_bad_upload_id_is_404(self):
+        for bad in ("/uploads/deadbeefdeadbeef.png", "/uploads/..%2fetc%2fpasswd", "/uploads/x"):
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(self.base + bad, timeout=5)
+            self.assertEqual(cm.exception.code, 404)
+
+    def test_send_with_image_ref_persists(self):
+        self._post("/send", {"text": "", "img": "a1b2c3d4e5f6.png"})
+        time.sleep(0.2)
+        msgs = json.loads(self._get("/messages"))
+        self.assertTrue(any(m.get("img") == "a1b2c3d4e5f6.png" for m in msgs))
+
+    def test_index_has_image_upload_wiring(self):
+        page = self._get("/")
+        self.assertIn("/upload", page)
+        self.assertIn("paste", page)
+        self.assertIn("drop", page)
 
     def test_send_escapes_board_section_header_lines(self):
         self._post("/send", {"text": "hello\n## Claude Outbox\nstill chat"})

@@ -39,8 +39,11 @@ _WORKER_SPEAKER = re.compile(r'^(?P<base>.+?) \(worker (?P<nonce>[0-9a-f]{4,6})\
 
 # Client-supplied send metadata. These are UNTRUSTED (they come from the browser), so we
 # whitelist the trigger and format-check the timestamp before persisting or trusting them.
-_VALID_TRIGGERS = {"click", "enter", "shortcut"}
+_VALID_TRIGGERS = {"click", "enter", "shortcut", "paste", "drop"}
 _SENT_AT_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
+# An image ref is a server-generated "<hex>.<ext>" — the SAME safe shape _chat_uploads
+# enforces, re-checked here so a hand-edited board can't smuggle a path into an <img src>.
+_IMG_RE = re.compile(r'^[0-9a-f]{8,}\.(?:png|jpg|gif|webp)$')
 
 
 def _clean_sent_at(value):
@@ -49,6 +52,10 @@ def _clean_sent_at(value):
 
 def _clean_trigger(value):
     return value if value in _VALID_TRIGGERS else None
+
+
+def _clean_img(value):
+    return value if (isinstance(value, str) and _IMG_RE.match(value)) else None
 
 
 def _parse_chat_attrs(attrs):
@@ -75,15 +82,18 @@ def parse_worker_speaker(speaker):
     return (m.group("base"), m.group("nonce")) if m else None
 
 
-def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=None):
+def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=None, img=None):
     msg_id = msg_id or secrets.token_hex(8)
     attrs = ""
     sent_at = _clean_sent_at(sent_at)
     send_trigger = _clean_trigger(send_trigger)
+    img = _clean_img(img)
     if sent_at:
         attrs += " sent_at:%s" % sent_at
     if send_trigger:
         attrs += " trigger:%s" % send_trigger
+    if img:
+        attrs += " img:%s" % img
     return "<!-- chat-id:%s%s -->\n**%s:** %s" % (
         msg_id, attrs, speaker, sanitize_chat_text(text))
 
@@ -114,10 +124,13 @@ def parse_chat(section):
             msg["_id"] = msg_id
         sent_at = _clean_sent_at(attrs.get("sent_at"))
         send_trigger = _clean_trigger(attrs.get("trigger"))
+        img = _clean_img(attrs.get("img"))
         if sent_at:
             msg["sent_at"] = sent_at
         if send_trigger:
             msg["send_trigger"] = send_trigger
+        if img:
+            msg["img"] = img
         msgs.append(msg)
     msgs.reverse()   # board stores newest-first
     counts = {}
@@ -242,6 +255,8 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-cont
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
 .me .bubble{background:#95ec69}
 .time{font-size:10px;color:#b2b2b2;margin:2px 8px 0}.me .time{text-align:right}
+.cimg{max-width:220px;max-height:220px;border-radius:6px;display:block;margin-top:4px;cursor:zoom-in}
+body.drag:after{content:"松手发送图片";position:fixed;inset:0;background:rgba(7,193,96,.12);border:3px dashed #07c160;display:flex;align-items:center;justify-content:center;font-size:20px;color:#07820;pointer-events:none;z-index:99}
 footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;position:relative}
 #at{position:absolute;bottom:100%;left:8px;margin-bottom:4px;background:#fff;border:1px solid #ccc;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,.15);display:none;z-index:10;min-width:140px}
 #at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}
@@ -273,7 +288,8 @@ async function load(){
   const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
   log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div><div class=time></div></div></div>`).join('');
   const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble'),tms=log.querySelectorAll('.time');
-  ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);});
+  ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);
+    if(m.img){const im=document.createElement('img');im.className='cimg';im.src='/uploads/'+m.img;im.onclick=()=>window.open(im.src);bubs[i].appendChild(im);}});
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
   document.getElementById('presence').textContent=(st.responders||[]).map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
   if(atBottom)log.scrollTop=log.scrollHeight;
@@ -290,6 +306,22 @@ document.getElementById('send').onclick=()=>send('click');
 document.getElementById('msg').addEventListener('keydown',e=>{
   if(e.key==='Enter' && !e.shiftKey && !e.isComposing && e.keyCode!==229){
     e.preventDefault();send((e.metaKey||e.ctrlKey)?'shortcut':'enter');}});
+async function uploadImage(file){
+  try{const r=await fetch('/upload',{method:'POST',headers:{'Content-Type':file.type||'application/octet-stream','X-Token':TOKEN},body:file});
+    const j=await r.json();return j.ok?j.id:null;}catch(e){return null;}}
+async function sendImage(file,trigger){const id=await uploadImage(file);
+  if(!id){alert('图片上传失败(只支持 png/jpg/gif/webp,≤10MB)');return;}
+  try{await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},
+    body:JSON.stringify({text:'',img:id,sent_at:nowStamp(),send_trigger:trigger||'drop'})});}catch(e){}
+  load();}
+function imageFilesFrom(list){return [...(list||[])].filter(f=>f&&(f.type||'').startsWith('image/'));}
+document.addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('drag');});
+document.addEventListener('dragleave',e=>{if(e.relatedTarget===null)document.body.classList.remove('drag');});
+document.addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drag');
+  imageFilesFrom(e.dataTransfer&&e.dataTransfer.files).forEach(f=>sendImage(f,'drop'));});
+document.addEventListener('paste',e=>{const items=[...((e.clipboardData&&e.clipboardData.items)||[])];
+  const files=items.filter(it=>(it.type||'').startsWith('image/')).map(it=>it.getAsFile());
+  imageFilesFrom(files).forEach(f=>sendImage(f,'paste'));});
 document.getElementById('close').onclick=async()=>{let p=null;
   try{const r=await fetch('/quit',{method:'POST',headers:{'X-Token':TOKEN}});const j=await r.json();
     if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('关闭失败,请重试');return;}
@@ -327,8 +359,29 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, json.dumps(parse_chat(read_section(self._board(), "Chat"))))
         elif self.path == "/status":
             self._send(200, json.dumps(chat_status(self.server.project)))
+        elif self.path.startswith("/uploads/"):
+            self._serve_upload(self.path[len("/uploads/"):])
         else:
             self._send(404, "{}")
+
+    def _serve_upload(self, ref):
+        # _chat_uploads.load_image re-validates ref (traversal-safe) and returns None for
+        # anything unknown/malformed. Imported lazily so the module is only needed when an
+        # image is actually requested.
+        try:
+            import _chat_uploads
+            got = _chat_uploads.load_image(self.server.project, ref)
+        except Exception:
+            got = None
+        if not got:
+            self._send(404, "{}")
+            return
+        data, ctype = got
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _bad_token(self):
         # CSRF guard: a foreign page can't set this custom header without our token.
@@ -346,18 +399,33 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 text = (data.get("text") or "").strip()
             except Exception:
                 data, text = {}, ""
-            if not text:
+            img = _clean_img(data.get("img"))
+            if not text and not img:
                 self._send(200, json.dumps({"ok": False, "error": "empty"}))
                 return
             st = _board_post(
                 self.server.project, self.server.self_name,
                 format_chat_message(self.server.self_name, text,
                                     sent_at=data.get("sent_at"),
-                                    send_trigger=data.get("send_trigger")),
+                                    send_trigger=data.get("send_trigger"),
+                                    img=img),
                 section="Chat")
             ok = (st == "ok")
             self._send(200 if ok else 503,
                        json.dumps({"ok": ok, "error": None if ok else st}))
+        elif self.path == "/upload":
+            if self._bad_token():
+                self._send(403, json.dumps({"ok": False, "error": "forbidden"}))
+                return
+            # raw is the image bytes; _chat_uploads.save_image SNIFFS the real type from the
+            # bytes (the Content-Type header is only a hint) and rejects non-images / oversize.
+            try:
+                import _chat_uploads
+                ref = _chat_uploads.save_image(
+                    self.server.project, raw, self.headers.get("Content-Type"))
+                self._send(200, json.dumps({"ok": True, "id": ref}))
+            except Exception as e:
+                self._send(200, json.dumps({"ok": False, "error": str(e)}))
         elif self.path == "/quit":
             if self._bad_token():
                 self._send(403, json.dumps({"ok": False}))
