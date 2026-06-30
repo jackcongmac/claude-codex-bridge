@@ -93,3 +93,7 @@ def default_push(project):
     r = subprocess.run(["scripts/bridge-push.sh", implementer],
                        cwd=root, capture_output=True, text=True, timeout=300)
     return {"ok": r.returncode == 0, "pushed_sha": _git_head(root)}
+
+
+def run_task_executor(task, project):
+    return run_task(project, task, default_implement, default_review, default_push)

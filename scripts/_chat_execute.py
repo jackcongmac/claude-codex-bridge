@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import collab_paths, find_project_root, now_str  # noqa: E402
 import _chat_roles  # noqa: E402
 from _post import post as _board_post   # noqa: E402
+import _chat_executor  # noqa: E402
 
 _HIGH_RISK = re.compile(
     r"(发版|发布|publish|release|打?\s*tag\b|删\s*(除|文件|掉)|\bdelete\b|\brm\b|"
@@ -97,19 +98,24 @@ def _stub_executor(task):
     return {"ok": False, "summary": "executor not wired (see next plan)"}
 
 
+def _poster_speaker(project):
+    return _chat_roles.lead_name(project) or "Lead"     # never empty
+
+
+_default_executor = _chat_executor.run_task_executor
+
+
 def execute_once(project, judge=None, executor=None, poster=None):
     if os.environ.get("BRIDGE_CHAT_EXECUTE") != "1":
         return "disabled"
-    if judge is None or executor is None:
-        # real boundaries are wired in the executor-integration plan; refuse to guess here
-        executor = executor or _stub_executor
-        if judge is None:
-            return "none"
+    executor = executor or _default_executor
+    if judge is None:
+        return "none"
     from bridge_common import read_section
     msgs = _parse_chat_fn()(read_section(
         collab_paths(find_project_root(project))["board"], "Chat"))
     if poster is None:
-        lead = _chat_roles.lead_name(project)
+        lead = _poster_speaker(project)
         poster = lambda text: _board_post(project, lead, text, section="Chat")
     decision = decide(project, msgs, judge)
 
@@ -120,7 +126,7 @@ def execute_once(project, judge=None, executor=None, poster=None):
     if st != "acked-enqueued":
         return {"asked": "asked", "requested-greenlight": "requested-greenlight",
                 "noop": "ignore"}.get(st, "none")
-    result = executor(captured["task"])
+    result = executor(captured["task"], project)
     report(project, captured["task"], result, poster)
     return "done"
 

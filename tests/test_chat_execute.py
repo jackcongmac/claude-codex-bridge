@@ -134,7 +134,7 @@ class ExecuteOnceTests(unittest.TestCase):
             st = ce.execute_once(
                 self.tmp,
                 judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"},
-                executor=lambda task: {"ok": True, "summary": "done", "commit": "abc1234"},
+                executor=lambda task, project: {"ok": True, "summary": "done", "commit": "abc1234"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -144,6 +144,20 @@ class ExecuteOnceTests(unittest.TestCase):
         self.assertIn("✅", joined)            # report
         with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
             self.assertIn("abc1234", f.read())
+
+class DefaultPosterTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(); os.mkdir(os.path.join(self.tmp, ".collab"))
+
+    def test_default_poster_speaker_is_never_empty(self):
+        import json
+        with open(os.path.join(self.tmp, ".collab", "roles.json"), "w") as f:
+            json.dump({"human": "Jack", "lead": ""}, f)   # lead unconfigured
+        self.assertNotEqual(ce._poster_speaker(self.tmp), "")   # falls back, never ""
+
+class DefaultExecutorWiringTests(unittest.TestCase):
+    def test_default_executor_is_the_pipeline_runner(self):
+        self.assertIs(ce._default_executor, __import__("_chat_executor").run_task_executor)
 
 if __name__ == "__main__":
     unittest.main()
