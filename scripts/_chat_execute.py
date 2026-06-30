@@ -17,3 +17,22 @@ _HIGH_RISK = re.compile(
 
 def is_high_risk(task_text):
     return bool(_HIGH_RISK.search(task_text or ""))
+
+
+def decide(project, msgs, judge):
+    if not msgs:
+        return {"action": "none"}
+    latest = msgs[-1]
+    if not _chat_roles.is_human(latest.get("speaker", ""), project):
+        return {"action": "ignore", "reason": "not-human"}
+    verdict = judge(latest.get("text", ""), msgs[:-1]) or {}
+    kind = verdict.get("kind")
+    if kind == "actionable":
+        task = (verdict.get("task") or latest.get("text", "")).strip()
+        if is_high_risk(task):
+            return {"action": "request_greenlight", "task": task}
+        return {"action": "execute", "task": task}
+    if kind == "ambiguous":
+        return {"action": "ask",
+                "question": verdict.get("question") or "你是要现在就开始做吗?"}
+    return {"action": "ignore", "reason": "opinion"}
