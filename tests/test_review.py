@@ -184,5 +184,23 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
 
 
+class LatestVerdictTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(); os.mkdir(os.path.join(self.tmp, ".collab"))
+
+    def test_returns_most_recent_verdict_for_sha(self):
+        import _review
+        reviewer = _review._detected_recorder("Codex")
+        _review.record(self.tmp, reviewer, "deadbeef", "FIX-FIRST", note="first")
+        _review.record(self.tmp, reviewer, "deadbeef", "GO", note="now ok")
+        v = _review.latest_verdict(self.tmp, "deadbeef")
+        self.assertEqual(v["verdict"], "GO")
+        self.assertEqual(v["note"], "now ok")
+
+    def test_unknown_sha_is_none(self):
+        import _review
+        self.assertEqual(_review.latest_verdict(self.tmp, "nope")["verdict"], "NONE")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -103,6 +103,17 @@ def has_approval(project, sha, exclude_actor):
     return False
 
 
+def latest_verdict(project, sha):
+    p = collab_paths(find_project_root(project))
+    led = read_json(p["reviews"], default={"reviews": []}) or {"reviews": []}
+    full = _canonical_sha(project, sha)
+    matches = [e for e in led.get("reviews", []) if e.get("sha") in (sha, full)]
+    if not matches:
+        return {"verdict": "NONE", "note": ""}
+    last = matches[-1]
+    return {"verdict": last.get("verdict", "NONE"), "note": last.get("note", "")}
+
+
 def cmd_record(args):
     st = record(find_project_root(args.project), args.self_name, args.sha,
                 args.verdict, args.target, args.note, args.bypass)
