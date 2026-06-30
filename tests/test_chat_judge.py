@@ -7,6 +7,10 @@ import _chat_judge as judge
 
 
 class ChatJudgeTests(unittest.TestCase):
+    def test_is_actionable_identifies_actionable_verdicts(self):
+        self.assertIs(judge.is_actionable({"kind": "actionable"}), True)
+        self.assertIs(judge.is_actionable({"kind": "opinion"}), False)
+
     def test_clean_json_actionable_extracts_task(self):
         out = judge.classify(
             "把登录错误修一下",

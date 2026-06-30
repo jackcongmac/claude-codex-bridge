@@ -7,6 +7,10 @@ _DEFAULT_QUESTION = "你是要现在就开始做吗?"
 _VALID_KINDS = {"actionable", "opinion", "ambiguous"}
 
 
+def is_actionable(verdict):
+    return verdict.get('kind') == 'actionable'
+
+
 def _safe_ambiguous():
     return {"kind": "ambiguous", "question": _DEFAULT_QUESTION}
 
