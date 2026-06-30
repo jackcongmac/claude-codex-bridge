@@ -130,6 +130,13 @@ def _parse_chat_fn():
     return mod.parse_chat
 
 
+def _format_chat_fn():
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = _ilu.spec_from_file_location("_cw", os.path.join(here, "bridge-chat-web.py"))
+    mod = _ilu.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod.format_chat_message
+
+
 def _stub_executor(task):
     return {"ok": False, "summary": "executor not wired (see next plan)"}
 
@@ -158,7 +165,8 @@ def execute_once(project, judge=None, executor=None, poster=None):
         return "handled"
     if poster is None:
         lead = _poster_speaker(project)
-        poster = lambda text: _board_post(project, lead, text, section="Chat")
+        fmt = _format_chat_fn()
+        poster = lambda text: _board_post(project, lead, fmt(lead, text), section="Chat")
     decision = decide(project, msgs, judge)
     _mark_handled(project, mid)
 

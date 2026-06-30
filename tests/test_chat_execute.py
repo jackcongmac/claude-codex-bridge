@@ -145,6 +145,25 @@ class ExecuteOnceTests(unittest.TestCase):
         with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
             self.assertIn("abc1234", f.read())
 
+    def test_default_poster_formats_executor_messages_as_lead(self):
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task, project: {"ok": True, "summary": "done"},
+                poster=None)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        from bridge_common import collab_paths, find_project_root, read_section
+        board = collab_paths(find_project_root(self.tmp))["board"]
+        msgs = ce._parse_chat_fn()(read_section(board, "Chat"))
+        ack = next(msg for msg in msgs if msg["text"].startswith("开始执行:"))
+        self.assertEqual(ack["speaker"], "Claude")
+        self.assertNotIn("?", [msg["speaker"] for msg in msgs])
+
     def test_skips_latest_message_already_marked_handled(self):
         import json
         with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
