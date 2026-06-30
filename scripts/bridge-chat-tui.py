@@ -51,9 +51,11 @@ def chat_status(project):
 
 def status_snapshot(status):
     typing = tuple(status.get("typing", []) or [])
+    presence = tuple((r.get("name"), bool(r.get("alive")), r.get("verdict"))
+                     for r in (status.get("presence", []) or []))
     responders = tuple((r.get("name"), bool(r.get("alive")))
                        for r in (status.get("responders", []) or []))
-    return typing, responders
+    return typing, presence, responders
 
 
 def render_chat(project, self_name, draft="", status=None):
@@ -62,8 +64,14 @@ def render_chat(project, self_name, draft="", status=None):
     msgs = chatweb.parse_chat(read_section(p["board"], "Chat"))
     lines = ["群聊 · %s  (Enter 发送, Esc 退出)" % self_name, ""]
     status = status if status is not None else chat_status(project)
+    presence = status.get("presence", [])
+    if presence:
+        lines.append("在线状态 " + " · ".join(
+            "%s:%s" % (r.get("name"), "在线" if r.get("alive") else "离线")
+            for r in presence))
+        lines.append("")
     responders = status.get("responders", [])
-    if responders:
+    if responders and not presence:
         lines.append("应答器 " + " · ".join(
             "%s:%s" % (r.get("name"), "在线" if r.get("alive") else "离线")
             for r in responders))

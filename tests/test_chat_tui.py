@@ -92,6 +92,24 @@ class BridgeChatTuiTests(unittest.TestCase):
         self.assertIn("Claude:在线", r.stdout)
         self.assertIn("Codex:离线", r.stdout)
 
+    def test_render_chat_prefers_participant_liveness_over_responder_health(self):
+        status = {
+            "typing": [],
+            "presence": [
+                {"name": "Claude", "alive": True, "verdict": "PRESENT"},
+                {"name": "Codex", "alive": True, "verdict": "PRESENT"},
+            ],
+            "responders": [
+                {"name": "Claude", "alive": False},
+                {"name": "Codex", "alive": False},
+            ],
+        }
+
+        out = ct.render_chat(self.tmp, "Jack", status=status)
+
+        self.assertIn("在线状态 Claude:在线 · Codex:在线", out)
+        self.assertNotIn("应答器 Claude:离线", out)
+
     def test_interactive_line_mode_ignores_chat_archive_lookalike_section(self):
         (self.collab / "collaboration.md").write_text(
             "# Board\n\n## Chat Archive\n\n### 2026-06-16 10:00:01 PDT\n\n**Jack:** old\n\n"

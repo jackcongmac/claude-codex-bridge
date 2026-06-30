@@ -354,6 +354,26 @@ class ServerRoundTripTests(unittest.TestCase):
             {"name": "Codex", "alive": False},
         ])
 
+    def test_status_reports_participant_liveness_from_heartbeats(self):
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [
+                {"name": "Claude", "last_seen": cw.now_str()},
+                {"name": "Codex", "last_seen": cw.now_str()},
+            ]
+        }))
+
+        status = json.loads(self._get("/status"))
+
+        presence = {row["name"]: row for row in status["presence"]}
+        self.assertTrue(presence["Claude"]["alive"])
+        self.assertEqual(presence["Claude"]["verdict"], "PRESENT")
+        self.assertTrue(presence["Codex"]["alive"])
+        self.assertEqual(presence["Codex"]["verdict"], "PRESENT")
+        self.assertEqual(status["responders"], [
+            {"name": "Claude", "alive": False},
+            {"name": "Codex", "alive": False},
+        ])
+
     def test_index_polls_status_for_typing_indicator(self):
         page = self._get("/")
 

@@ -29,6 +29,7 @@ from bridge_common import (  # noqa: E402
     atomic_write_json, now_str, acquire_lock, release_lock,
 )
 from _post import post as _board_post  # noqa: E402
+from _liveness import verdict as liveness_verdict  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
@@ -44,6 +45,8 @@ _SENT_AT_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
 # An image ref is a server-generated "<hex>.<ext>" — the SAME safe shape _chat_uploads
 # enforces, re-checked here so a hand-edited board can't smuggle a path into an <img src>.
 _IMG_RE = re.compile(r'^[0-9a-f]{8,}\.(?:png|jpg|gif|webp)$')
+_CHAT_PEERS = ("Claude", "Codex")
+_LIVE_VERDICTS = {"REACTIVE", "PRESENT"}
 
 
 def _clean_sent_at(value):
@@ -239,8 +242,39 @@ def chat_status(project, now=None):
         agents = {}
     typing = sorted(name for name, info in agents.items() if _typing_active(info, now=now))
     responders = [{"name": name, "alive": responder_owner_alive(project, name)}
-                  for name in ("Claude", "Codex")]
-    return {"typing": typing, "responders": responders}
+                  for name in _CHAT_PEERS]
+    return {"typing": typing, "presence": participant_liveness(project, now=now),
+            "responders": responders}
+
+
+def participant_liveness(project, now=None):
+    project = find_project_root(project)
+    p = collab_paths(project)
+    try:
+        reg = read_json(p["participants"], default={"participants": []}) or {"participants": []}
+    except RuntimeError:
+        reg = {"participants": []}
+    stale_after = float(os.environ.get("BRIDGE_PRESENCE_STALE", 1800))
+    observed_at = time.time() if now is None else now
+    rows = {}
+    for part in reg.get("participants", []) or []:
+        if not isinstance(part, dict) or not part.get("name"):
+            continue
+        row = liveness_verdict(part, p["dir"], observed_at, stale_after, stale_after)
+        rows[row["name"]] = row
+    if not rows:
+        return []
+    out = []
+    for name in _CHAT_PEERS:
+        row = rows.get(name)
+        if not row:
+            out.append({"name": name, "alive": False, "verdict": "OFFLINE",
+                        "reactive": False, "armed": False, "age": None})
+            continue
+        out.append({"name": name, "alive": row["verdict"] in _LIVE_VERDICTS,
+                    "verdict": row["verdict"], "reactive": row["reactive"],
+                    "armed": row["armed"], "age": row["age"]})
+    return out
 
 
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>群聊</title><style>
@@ -297,7 +331,8 @@ async function load(){
     if(atBottom)log.scrollTop=log.scrollHeight;
   }
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join('、')} 正在思考…`:'';
-  document.getElementById('presence').textContent=(st.responders||[]).map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
+  const presence=st.presence||st.responders||[];
+  document.getElementById('presence').textContent=presence.map(r=>`${r.name}:${r.alive?'在线':'离线'}`).join(' · ');
 }
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
