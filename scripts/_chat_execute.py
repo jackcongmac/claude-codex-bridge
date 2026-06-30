@@ -2,6 +2,7 @@
 gated, reported execution decision. LLM judgment and the write-capable executor are
 injected boundaries (see execute_once). Safe: gated behind BRIDGE_CHAT_EXECUTE=1."""
 import argparse
+import importlib.util as _ilu
 import os
 import re
 import sys
@@ -9,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import collab_paths, find_project_root, now_str  # noqa: E402
 import _chat_roles  # noqa: E402
+from _post import post as _board_post   # noqa: E402
 
 _HIGH_RISK = re.compile(
     r"(发版|发布|publish|release|打?\s*tag\b|删\s*(除|文件|掉)|\bdelete\b|\brm\b|"
@@ -81,3 +83,58 @@ def report(project, task, result, poster):
         (" · commit " + commit) if commit else "")
     with open(path, "w") as f:
         f.write(body.rstrip() + "\n" + row)
+
+
+def _parse_chat_fn():
+    # bridge-chat-web.py is hyphen-named; load parse_chat the same way _chat_respond does
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = _ilu.spec_from_file_location("_cw", os.path.join(here, "bridge-chat-web.py"))
+    mod = _ilu.module_from_spec(spec); spec.loader.exec_module(mod)
+    return mod.parse_chat
+
+
+def _stub_executor(task):
+    return {"ok": False, "summary": "executor not wired (see next plan)"}
+
+
+def execute_once(project, judge=None, executor=None, poster=None):
+    if os.environ.get("BRIDGE_CHAT_EXECUTE") != "1":
+        return "disabled"
+    if judge is None or executor is None:
+        # real boundaries are wired in the executor-integration plan; refuse to guess here
+        executor = executor or _stub_executor
+        if judge is None:
+            return "none"
+    from bridge_common import read_section
+    msgs = _parse_chat_fn()(read_section(
+        collab_paths(find_project_root(project))["board"], "Chat"))
+    if poster is None:
+        lead = _chat_roles.lead_name(project)
+        poster = lambda text: _board_post(project, lead, text, section="Chat")
+    decision = decide(project, msgs, judge)
+
+    captured = {}
+    def _enqueue(task):
+        captured["task"] = task
+    st = dispatch(project, decision, poster, _enqueue)
+    if st != "acked-enqueued":
+        return {"asked": "asked", "requested-greenlight": "requested-greenlight",
+                "noop": "ignore"}.get(st, "none")
+    result = executor(captured["task"])
+    report(project, captured["task"], result, poster)
+    return "done"
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    sub = ap.add_subparsers(dest="cmd")
+    o = sub.add_parser("once")
+    o.add_argument("--project", default=None)
+    a = ap.parse_args()
+    if a.cmd == "once":
+        print(execute_once(a.project))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

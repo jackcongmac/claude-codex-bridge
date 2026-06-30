@@ -111,5 +111,39 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(any("❌" in p and "测试没过" in p for p in self.posts))
         self.assertIn("测试没过", self._issues())
 
+class ExecuteOnceTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        collab = os.path.join(self.tmp, ".collab"); os.mkdir(collab)
+        import json
+        with open(os.path.join(collab, "roles.json"), "w") as f:
+            json.dump({"human": "Jack", "lead": "Claude"}, f)
+        with open(os.path.join(collab, "collaboration_signal.json"), "w") as f:
+            json.dump({"update_id": 0}, f)
+        with open(os.path.join(collab, "collaboration.md"), "w") as f:
+            f.write("# Board\n\n## Chat\n\n### 2026-06-29 10:00:00 PDT\n\n**Jack:** 把④英文化做了\n")
+        self.posts = []
+
+    def test_disabled_by_default(self):
+        os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+        self.assertEqual(ce.execute_once(self.tmp), "disabled")
+
+    def test_runs_full_path_with_injected_judge_and_executor(self):
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task: {"ok": True, "summary": "done", "commit": "abc1234"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+        self.assertEqual(st, "done")
+        joined = "\n".join(self.posts)
+        self.assertIn("开始执行", joined)     # ack
+        self.assertIn("✅", joined)            # report
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            self.assertIn("abc1234", f.read())
+
 if __name__ == "__main__":
     unittest.main()
