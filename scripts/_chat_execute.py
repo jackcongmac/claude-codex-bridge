@@ -61,6 +61,41 @@ def _issues_path(project):
     return os.path.join(collab_paths(find_project_root(project))["dir"], "ISSUES.md")
 
 
+def _execute_state_path(project):
+    return os.path.join(collab_paths(find_project_root(project))["dir"],
+                        "chat_execute_state.json")
+
+
+def _load_handled(project):
+    try:
+        import json
+        with open(_execute_state_path(project)) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return []
+    ids = data.get("handled", [])
+    return ids if isinstance(ids, list) else []
+
+
+def _mark_handled(project, mid):
+    import json, os as _os
+    handled = _load_handled(project)
+    if mid in handled:
+        return
+    handled.append(mid)
+    handled = handled[-500:]
+    p = _execute_state_path(project)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"handled": handled}, f)
+    _os.replace(tmp, p)
+
+
+def _msg_key(msg):
+    return msg.get("_id") or ("%s|%s|%s" % (
+        msg.get("ts", ""), msg.get("speaker", ""), msg.get("text", "")))[:80]
+
+
 def report(project, task, result, poster):
     ok = bool(result.get("ok"))
     summary = result.get("summary") or ""
@@ -115,10 +150,17 @@ def execute_once(project, judge=None, executor=None, poster=None):
     from bridge_common import read_section
     msgs = _parse_chat_fn()(read_section(
         collab_paths(find_project_root(project))["board"], "Chat"))
+    if not msgs:
+        return "empty"
+    latest = msgs[-1]
+    mid = _msg_key(latest)
+    if mid in _load_handled(project):
+        return "handled"
     if poster is None:
         lead = _poster_speaker(project)
         poster = lambda text: _board_post(project, lead, text, section="Chat")
     decision = decide(project, msgs, judge)
+    _mark_handled(project, mid)
 
     captured = {}
     def _enqueue(task):

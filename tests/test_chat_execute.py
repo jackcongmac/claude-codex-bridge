@@ -1,4 +1,4 @@
-import os, pathlib, sys, tempfile, unittest
+import json, os, pathlib, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import _chat_execute as ce
 
@@ -145,6 +145,66 @@ class ExecuteOnceTests(unittest.TestCase):
         with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
             self.assertIn("abc1234", f.read())
 
+    def test_skips_latest_message_already_marked_handled(self):
+        import json
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:greenlight-1 -->\n"
+                "**Jack:** yes, do it\n"
+                "### 2026-06-29 09:59:00 PDT\n\n"
+                "**Claude:** waiting for your greenlight\n")
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
+            json.dump({"handled": ["greenlight-1"]}, f)
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "do it"},
+                executor=lambda task, project: self.fail("executor must not re-run"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "handled")
+        self.assertEqual(self.posts, [])
+
+    def test_actionable_run_marks_latest_message_handled(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:greenlight-2 -->\n"
+                "**Jack:** yes, execute the task\n"
+                "### 2026-06-29 09:59:00 PDT\n\n"
+                "**Claude:** waiting for your greenlight\n")
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "execute the task"},
+                executor=lambda task, project: {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertIn("greenlight-2", ce._load_handled(self.tmp))
+
+    def test_mark_handled_is_idempotent_and_bounded(self):
+        ce._mark_handled(self.tmp, "same-id")
+        ce._mark_handled(self.tmp, "same-id")
+        self.assertEqual(ce._load_handled(self.tmp), ["same-id"])
+        for i in range(600):
+            ce._mark_handled(self.tmp, "id-%03d" % i)
+
+        handled = ce._load_handled(self.tmp)
+        self.assertLessEqual(len(handled), 500)
+        self.assertEqual(handled[-1], "id-599")
+
 class DefaultPosterTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(); os.mkdir(os.path.join(self.tmp, ".collab"))
@@ -158,6 +218,55 @@ class DefaultPosterTests(unittest.TestCase):
 class DefaultExecutorWiringTests(unittest.TestCase):
     def test_default_executor_is_the_pipeline_runner(self):
         self.assertIs(ce._default_executor, __import__("_chat_executor").run_task_executor)
+
+class ChatExecuteSupervisorScriptTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.collab = pathlib.Path(self.tmp) / ".collab"
+        self.collab.mkdir()
+        (self.collab / "roles.json").write_text(json.dumps({"human": "Jack", "lead": "Claude"}))
+        (self.collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        (self.collab / "collaboration.md").write_text("# Board\n\n## Chat\n\n")
+        self.procs = []
+
+    def tearDown(self):
+        for proc in self.procs:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+        pidfile = self.collab / ".chatexecute.pid"
+        if pidfile.exists():
+            try:
+                pidfile.unlink()
+            except OSError:
+                pass
+
+    def test_supervisor_loop_stays_running_and_claims_pidfile(self):
+        env = {**os.environ, "BRIDGE_CHAT_EXECUTE_INTERVAL": "0.1"}
+        env.pop("BRIDGE_CHAT_EXECUTE", None)
+        proc = subprocess.Popen(
+            [str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "bridge-chat-execute.sh"),
+             self.tmp],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        self.procs.append(proc)
+
+        pidfile = self.collab / ".chatexecute.pid"
+        deadline = time.time() + 4
+        while time.time() < deadline and not pidfile.exists() and proc.poll() is None:
+            time.sleep(0.05)
+
+        self.assertIsNone(proc.poll(), "chat execute supervisor must stay running")
+        self.assertEqual(pidfile.read_text().strip(), str(proc.pid))
+        proc.terminate()
+        self.assertEqual(proc.wait(timeout=2), 0)
+        self.assertFalse(pidfile.exists())
 
 if __name__ == "__main__":
     unittest.main()
