@@ -7,10 +7,12 @@ import importlib.util as _ilu
 import os
 import re
 import sys
+import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import (  # noqa: E402
+    _pid_alive,
     acquire_lock,
     atomic_write_json,
     collab_paths,
@@ -86,6 +88,7 @@ def _execute_lock_path(project):
 
 _STATE_LIMIT = 500
 _VALID_MSG_STATES = {"claimed", "running", "done"}
+_CLAIM_STALE_SECONDS = 2000
 
 
 def _normalize_state(data):
@@ -107,7 +110,13 @@ def _normalize_state(data):
                 state = entry
                 at = ""
             if state in _VALID_MSG_STATES:
-                messages[mid] = {"state": state, "at": at if isinstance(at, str) else ""}
+                normalized = {"state": state, "at": at if isinstance(at, str) else ""}
+                if isinstance(entry, dict):
+                    if "pid" in entry:
+                        normalized["pid"] = entry["pid"]
+                    if "epoch" in entry:
+                        normalized["epoch"] = entry["epoch"]
+                messages[mid] = normalized
         return {"version": 2, "messages": messages}
 
     return {"version": 2, "messages": {}}
@@ -135,7 +144,10 @@ def _write_state(project, state):
 
 def _set_state(project, mid, state):
     data = _load_state(project)
-    data.setdefault("messages", {})[mid] = {"state": state, "at": now_str()}
+    entry = {"state": state, "at": now_str()}
+    if state == "claimed":
+        entry.update({"pid": os.getpid(), "epoch": time.time()})
+    data.setdefault("messages", {})[mid] = entry
     _write_state(project, data)
 
 
@@ -165,6 +177,23 @@ def _msg_key(msg):
     return "h:" + hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
+def _claim_is_stale(entry):
+    pid = entry.get("pid")
+    epoch = entry.get("epoch")
+    if not pid or epoch is None:
+        return True
+    try:
+        owner_pid = int(pid)
+        if owner_pid <= 0:
+            return True
+        if _pid_alive(owner_pid):
+            age = time.time() - float(epoch)
+            return age > _CLAIM_STALE_SECONDS
+        return True
+    except (TypeError, ValueError):
+        return True
+
+
 def _claim_next_message(project, msgs):
     run_id = "chat-execute-%s-%s" % (os.getpid(), uuid.uuid4().hex)
     lock_path = _execute_lock_path(project)
@@ -179,11 +208,19 @@ def _claim_next_message(project, msgs):
             if not _chat_roles.is_human(msg.get("speaker", ""), project):
                 continue
             mid = _msg_key(msg)
-            cur = (messages.get(mid) or {}).get("state")
-            if cur in (None, "claimed"):
-                messages[mid] = {"state": "claimed", "at": now_str()}
+            entry = messages.get(mid) or {}
+            cur = entry.get("state")
+            if cur is None or (cur == "claimed" and _claim_is_stale(entry)):
+                messages[mid] = {
+                    "state": "claimed",
+                    "at": now_str(),
+                    "pid": os.getpid(),
+                    "epoch": time.time(),
+                }
                 _write_state(project, state)
                 return "claimed", idx, msg, warnings
+            if cur == "claimed":
+                continue
             if cur == "running":
                 warnings.append(
                     "⚠️ 上一个任务执行中断,需要你确认是否已完成/是否重跑:%s"

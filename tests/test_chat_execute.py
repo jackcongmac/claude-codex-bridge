@@ -2,6 +2,18 @@ import json, os, pathlib, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import _chat_execute as ce
 
+def _definitely_dead_pid():
+    pid = max(os.getpid() + 10000, 50000)
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except PermissionError:
+            pid += 1
+        else:
+            pid += 1
+
 class HighRiskTests(unittest.TestCase):
     def test_flags_release_delete_publish(self):
         for t in ["发版 v0.9", "打 tag v1", "删掉这个文件", "git push --force",
@@ -353,20 +365,18 @@ class ExecuteOnceTests(unittest.TestCase):
                 "### 2026-06-29 10:00:00 PDT\n\n"
                 "<!-- chat-id:claimed-before-run -->\n"
                 "**Jack:** do a retryable task\n")
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
+            json.dump({"version": 2, "messages": {
+                "claimed-before-run": {
+                    "state": "claimed",
+                    "at": "2026-06-29T10:00:00Z",
+                    "pid": _definitely_dead_pid(),
+                    "epoch": time.time() - 4000,
+                },
+            }}, f)
 
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
-            with self.assertRaises(RuntimeError):
-                ce.execute_once(
-                    self.tmp,
-                    judge=lambda t, c: (_ for _ in ()).throw(RuntimeError("judge crashed")),
-                    executor=lambda task, project: self.fail("executor must not start"),
-                    poster=self.posts.append)
-
-            with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
-                state = json.load(f)
-            self.assertEqual(state["messages"]["claimed-before-run"]["state"], "claimed")
-
             calls = []
             st = ce.execute_once(
                 self.tmp,
@@ -379,6 +389,74 @@ class ExecuteOnceTests(unittest.TestCase):
         self.assertEqual(st, "done")
         self.assertEqual(calls, ["retryable task"])
         self.assertIn("claimed-before-run", ce._load_handled(self.tmp))
+
+    def test_fresh_claim_by_live_owner_is_not_re_executed(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:fresh-live-claim -->\n"
+                "**Jack:** do not double execute this\n")
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
+            json.dump({"version": 2, "messages": {
+                "fresh-live-claim": {
+                    "state": "claimed",
+                    "at": "2026-06-29T10:00:00Z",
+                    "pid": os.getpid(),
+                    "epoch": time.time(),
+                },
+            }}, f)
+
+        calls = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "must not run"},
+                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "wrong"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "none")
+        self.assertEqual(calls, [])
+        self.assertFalse(any("上一个任务执行中断" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
+            state = json.load(f)
+        self.assertEqual(state["messages"]["fresh-live-claim"]["state"], "claimed")
+        self.assertEqual(state["messages"]["fresh-live-claim"]["pid"], os.getpid())
+
+    def test_claim_with_stale_epoch_but_live_pid_is_repicked(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:stale-live-claim -->\n"
+                "**Jack:** recover old live-pid claim\n")
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
+            json.dump({"version": 2, "messages": {
+                "stale-live-claim": {
+                    "state": "claimed",
+                    "at": "2026-06-29T10:00:00Z",
+                    "pid": os.getpid(),
+                    "epoch": time.time() - ce._CLAIM_STALE_SECONDS - 10,
+                },
+            }}, f)
+
+        calls = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c: {"kind": "actionable", "task": "recover stale claim"},
+                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(calls, ["recover stale claim"])
+        self.assertIn("stale-live-claim", ce._load_handled(self.tmp))
 
     def test_claim_lock_contention_returns_busy_without_executing(self):
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
