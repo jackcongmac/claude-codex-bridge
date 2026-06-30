@@ -34,3 +34,6 @@ collaboration_participants.json
 # Codex/CMUX agent skills that land in the repo root (e.g. cmux-direct-execution) —
 # kept on disk for Codex to use, but NOT part of this repo (the bridge's skill is skill/).
 /skills/
+
+# Subagent-driven-development process scratch (local)
+.superpowers/
