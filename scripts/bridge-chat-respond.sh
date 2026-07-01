@@ -33,6 +33,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$SELF" ] || { echo "[x] --self <Claude|Codex> required" >&2; exit 2; }
+
+# Running this wrapper IS the explicit opt-in to auto-responding (the responder is
+# off by default to avoid read-only/writable identity confusion; see
+# _chat_respond.py). Allow callers to override the environment.
+export BRIDGE_CHAT_AUTORESPOND="${BRIDGE_CHAT_AUTORESPOND:-1}"
+
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/bridge-paths.sh"
 bridge_resolve "$PROJECT"
 PROJECT="$BRIDGE_ROOT"

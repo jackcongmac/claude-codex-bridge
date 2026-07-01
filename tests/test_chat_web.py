@@ -23,6 +23,19 @@ cw = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cw)
 
 
+def _stamp(epoch):
+    return time.strftime("%Y-%m-%d %H:%M:%S PDT", time.localtime(epoch))
+
+
+class ResponderWrapperTests(unittest.TestCase):
+    def test_wrapper_exports_autorespond_opt_in(self):
+        text = (SCRIPTS / "bridge-chat-respond.sh").read_text()
+
+        self.assertIn(
+            'export BRIDGE_CHAT_AUTORESPOND="${BRIDGE_CHAT_AUTORESPOND:-1}"',
+            text)
+
+
 class ParseChatTests(unittest.TestCase):
     def test_empty_section_is_no_messages(self):
         self.assertEqual(cw.parse_chat(""), [])
@@ -354,6 +367,40 @@ class ServerRoundTripTests(unittest.TestCase):
             {"name": "Codex", "alive": False},
         ])
 
+    def test_status_reports_online_when_presence_stale_but_responder_alive(self):
+        now = time.time()
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [{"name": "Claude", "last_seen": _stamp(now - 4000)}]
+        }))
+        orig = cw.responder_owner_alive
+        cw.responder_owner_alive = lambda project, name: name == "Claude"
+        try:
+            status = cw.chat_status(self.tmp, now=now)
+        finally:
+            cw.responder_owner_alive = orig
+
+        presence = {row["name"]: row for row in status["presence"]}
+        responders = {row["name"]: row for row in status["responders"]}
+        online = {row["name"]: row["online"] for row in status["online"]}
+        self.assertFalse(presence["Claude"]["alive"])
+        self.assertTrue(responders["Claude"]["alive"])
+        self.assertTrue(online["Claude"])
+
+    def test_status_reports_offline_when_presence_stale_and_responder_dead(self):
+        now = time.time()
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [{"name": "Claude", "last_seen": _stamp(now - 4000)}]
+        }))
+        orig = cw.responder_owner_alive
+        cw.responder_owner_alive = lambda project, name: False
+        try:
+            status = cw.chat_status(self.tmp, now=now)
+        finally:
+            cw.responder_owner_alive = orig
+
+        online = {row["name"]: row["online"] for row in status["online"]}
+        self.assertFalse(online["Claude"])
+
     def test_status_reports_participant_liveness_from_heartbeats(self):
         pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
             "participants": [
@@ -380,6 +427,12 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=typing", page)
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
+
+    def test_index_prefers_status_online_for_presence_dot(self):
+        page = self._get("/")
+
+        self.assertIn("const online=st.online||st.presence||st.responders||[];", page)
+        self.assertIn("r.online!==undefined?r.online:r.alive", page)
 
     def test_index_uses_english_public_ui(self):
         page = self._get("/")

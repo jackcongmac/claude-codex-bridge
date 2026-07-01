@@ -243,8 +243,13 @@ def chat_status(project, now=None):
     typing = sorted(name for name, info in agents.items() if _typing_active(info, now=now))
     responders = [{"name": name, "alive": responder_owner_alive(project, name)}
                   for name in _CHAT_PEERS]
-    return {"typing": typing, "presence": participant_liveness(project, now=now),
-            "responders": responders}
+    presence_rows = participant_liveness(project, now=now)
+    pres_alive = {row["name"]: bool(row.get("alive")) for row in presence_rows}
+    resp_alive = {row["name"]: bool(row.get("alive")) for row in responders}
+    online = [{"name": name, "online": pres_alive.get(name, False) or resp_alive.get(name, False)}
+              for name in _CHAT_PEERS]
+    return {"typing": typing, "presence": presence_rows,
+            "responders": responders, "online": online}
 
 
 def participant_liveness(project, now=None):
@@ -333,8 +338,8 @@ async function load(){
     if(atBottom)log.scrollTop=log.scrollHeight;
   }
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join(', ')} thinking…`:'';
-  const presence=st.presence||st.responders||[];
-  document.getElementById('presence').textContent=presence.map(r=>`${r.name}:${r.alive?'online':'offline'}`).join(' · ');
+  const online=st.online||st.presence||st.responders||[];
+  document.getElementById('presence').textContent=online.map(r=>`${r.name}:${(r.online!==undefined?r.online:r.alive)?'online':'offline'}`).join(' · ');
 }
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
