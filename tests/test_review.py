@@ -71,6 +71,7 @@ class ReviewLedgerTests(unittest.TestCase):
         self.keys = pathlib.Path(self.tmp) / "keys"
         self.keys.mkdir()
         os.environ["BRIDGE_KEYS_DIR"] = str(self.keys)
+        os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
         key_dir = self.collab / "keys"
         key_dir.mkdir()
         _gen_key(str(self.keys / "Claude.key"))
@@ -83,6 +84,7 @@ class ReviewLedgerTests(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("BRIDGE_KEYS_DIR", None)
+        os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _record(self, *args, env=None):
@@ -110,6 +112,9 @@ class ReviewLedgerTests(unittest.TestCase):
         return subprocess.run(
             ["git", "-C", self.tmp, *args],
             capture_output=True, text=True, timeout=20, check=True)
+
+    def _reviews_path(self):
+        return self.collab / "collaboration_reviews.json"
 
     def test_peer_ship_approves_the_sha(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "SHIP")
@@ -215,8 +220,9 @@ class ReviewLedgerTests(unittest.TestCase):
 
         self.assertNotEqual(self._check("abc123", "Codex").returncode, 0)
 
-    def test_legacy_entry_without_recorded_by_still_approves(self):
-        (self.collab / "collaboration_reviews.json").write_text(json.dumps({
+    def test_legacy_entry_without_recorded_by_still_approves_with_escape_hatch(self):
+        os.environ["BRIDGE_REQUIRE_SIGNATURES"] = "0"
+        self._reviews_path().write_text(json.dumps({
             "reviews": [{
                 "reviewer": "Claude",
                 "sha": "abc123",
@@ -230,6 +236,69 @@ class ReviewLedgerTests(unittest.TestCase):
     def test_verdict_is_case_insensitive(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "ship")
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
+
+    def test_signed_go_by_other_reviewer_counts(self):
+        import _review
+
+        r = self._record("--self", "Claude", "--sha", "sha1", "--verdict", "GO",
+                         env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(
+            _review.has_approval(self.tmp, "sha1", exclude_actor="Codex"))
+
+    def test_unsigned_legacy_go_does_not_count(self):
+        import _review
+
+        self._reviews_path().write_text(json.dumps({
+            "reviews": [{
+                "reviewer": "Claude",
+                "sha": "sha2",
+                "verdict": "GO",
+                "bypass": False,
+                "recorded_by": "Claude",
+            }]
+        }))
+
+        self.assertFalse(
+            _review.has_approval(self.tmp, "sha2", exclude_actor="Codex"))
+
+    def test_forged_sig_rejected(self):
+        import _review
+
+        self._reviews_path().write_text(json.dumps({
+            "reviews": [{
+                "reviewer": "Claude",
+                "sha": "sha3",
+                "verdict": "GO",
+                "bypass": False,
+                "recorded_by": "Claude",
+                "ts": "t",
+                "nonce": "n",
+                "sig": "-----BEGIN SSH SIGNATURE-----\n"
+                       "garbage\n"
+                       "-----END SSH SIGNATURE-----\n",
+            }]
+        }))
+
+        self.assertFalse(
+            _review.has_approval(self.tmp, "sha3", exclude_actor="Codex"))
+
+    def test_escape_hatch_allows_legacy_when_disabled(self):
+        import _review
+
+        os.environ["BRIDGE_REQUIRE_SIGNATURES"] = "0"
+        self._reviews_path().write_text(json.dumps({
+            "reviews": [{
+                "reviewer": "Claude",
+                "sha": "sha4",
+                "verdict": "GO",
+                "bypass": False,
+                "recorded_by": "Claude",
+            }]
+        }))
+
+        self.assertTrue(
+            _review.has_approval(self.tmp, "sha4", exclude_actor="Codex"))
 
 
 class LatestVerdictTests(unittest.TestCase):

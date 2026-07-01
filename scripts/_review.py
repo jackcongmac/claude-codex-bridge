@@ -34,6 +34,10 @@ import _sig  # noqa: E402
 APPROVING = {"SHIP", "GO"}
 
 
+def _sigs_required():
+    return os.environ.get("BRIDGE_REQUIRE_SIGNATURES", "1") != "0"
+
+
 def _nonce():
     return "%x-%x" % (int(time.time() * 1000), os.getpid())
 
@@ -92,16 +96,25 @@ def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False
 
 def has_approval(project, sha, exclude_actor):
     """True iff a NON-bypass approving (SHIP/GO) verdict exists for `sha` by a
-    reviewer other than `exclude_actor` (you can't approve your own push)."""
+    reviewer other than `exclude_actor`, whose signature verifies. When
+    BRIDGE_REQUIRE_SIGNATURES=0 (migration/test escape hatch), fall back to the
+    legacy recorded_by check."""
     p = collab_paths(project)
     led = read_json(p["reviews"], default={"reviews": []}) or {"reviews": []}
+    require = _sigs_required()
     for e in led.get("reviews", []):
-        recorded_by = e.get("recorded_by")
-        if (e.get("sha") == sha and not e.get("bypass")
-                and (e.get("verdict") or "").upper() in APPROVING
-                and (recorded_by is None or recorded_by == e.get("reviewer"))
-                and e.get("reviewer") and e.get("reviewer") != exclude_actor):
-            return True
+        if (e.get("sha") != sha or e.get("bypass")
+                or (e.get("verdict") or "").upper() not in APPROVING
+                or not e.get("reviewer") or e.get("reviewer") == exclude_actor):
+            continue
+        if require:
+            if _sig.verify(e.get("reviewer"), _sig.review_payload(e), e.get("sig"),
+                           project=project):
+                return True
+        else:
+            recorded_by = e.get("recorded_by")
+            if recorded_by is None or recorded_by == e.get("reviewer"):
+                return True
     return False
 
 
