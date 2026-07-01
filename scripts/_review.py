@@ -29,6 +29,7 @@ from bridge_common import (  # noqa: E402
     collab_paths, find_project_root, read_json, atomic_write_json, now_str,
     acquire_lock, release_lock,
 )
+import _sig  # noqa: E402
 
 APPROVING = {"SHIP", "GO"}
 
@@ -77,6 +78,7 @@ def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False
              "verdict": (verdict or "").upper(),
              "target": target, "note": note, "bypass": bool(bypass),
              "recorded_by": recorded_by, "ts": now_str(), "nonce": _nonce()}
+    entry["sig"] = _sig.sign(reviewer, _sig.review_payload(entry), project=project)
     if not acquire_lock(p["lock"], "review-%s" % reviewer, ttl=30, wait=wait):
         return "lockbusy"
     try:

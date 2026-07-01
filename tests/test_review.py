@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,22 @@ SCRIPTS = ROOT / "scripts"
 REVIEW = SCRIPTS / "_review.py"
 sys.path.insert(0, str(SCRIPTS))
 from _review import _detected_recorder  # noqa: E402
+
+
+def _have_sshkeygen():
+    return shutil.which("ssh-keygen") is not None
+
+
+def _gen_key(path):
+    subprocess.run(
+        ["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "test", "-f", path],
+        check=True, capture_output=True)
+
+
+def _pub_line(actor, keypath):
+    with open(keypath + ".pub") as f:
+        pub = f.read().split()
+    return "%s %s %s\n" % (actor, pub[0], pub[1])
 
 
 class DetectedRecorderTests(unittest.TestCase):
@@ -46,11 +63,27 @@ class ReviewLedgerTests(unittest.TestCase):
     exact SHA, and bypass entries never count as approval."""
 
     def setUp(self):
+        if not _have_sshkeygen():
+            self.skipTest("ssh-keygen not available")
         self.tmp = tempfile.mkdtemp()
         self.collab = pathlib.Path(self.tmp) / ".collab"
         self.collab.mkdir()
+        self.keys = pathlib.Path(self.tmp) / "keys"
+        self.keys.mkdir()
+        os.environ["BRIDGE_KEYS_DIR"] = str(self.keys)
+        key_dir = self.collab / "keys"
+        key_dir.mkdir()
+        _gen_key(str(self.keys / "Claude.key"))
+        _gen_key(str(self.keys / "Codex.key"))
+        (key_dir / "allowed_signers").write_text(
+            _pub_line("Claude", str(self.keys / "Claude.key"))
+            + _pub_line("Codex", str(self.keys / "Codex.key")))
         (self.collab / "collaboration_signal.json").write_text(
             json.dumps({"update_id": 0}))
+
+    def tearDown(self):
+        os.environ.pop("BRIDGE_KEYS_DIR", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _record(self, *args, env=None):
         run_env = os.environ.copy()
@@ -153,6 +186,21 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(led["reviews"][0]["recorded_by"], "Claude")
         self.assertEqual(self._check("abc123", "Codex").returncode, 0)
+
+    def test_record_signs_entry_when_key_present(self):
+        import _sig
+
+        r = self._record("--self", "Claude", "--sha", "deadbeef", "--verdict", "GO",
+                         "--note", "ok", env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        led = json.loads((self.collab / "collaboration_reviews.json").read_text())
+        entry = led["reviews"][-1]
+
+        self.assertTrue(entry.get("sig"))
+        self.assertTrue(
+            _sig.verify(
+                "Claude", _sig.review_payload(entry), entry["sig"],
+                project=self.tmp))
 
     def test_mismatched_recorded_by_does_not_approve(self):
         (self.collab / "collaboration_reviews.json").write_text(json.dumps({
