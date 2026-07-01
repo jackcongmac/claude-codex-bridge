@@ -309,19 +309,20 @@ def _spawn_claude(prompt, project, image_path=None):
 
 def _spawn_codex(prompt, project, image_path=None):
     codex = os.environ.get("CODEX_BIN") or "codex"
-    last = os.path.join(tempfile.mkdtemp(), "last.txt")
-    cmd = [codex, "exec", prompt]
-    if image_path:
-        cmd += ["-i", image_path]
-    cmd += ["--output-last-message", last, "-C", project,
-            "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"]
-    try:
-        subprocess.run(cmd, capture_output=True, text=True,
-                       timeout=int(os.environ.get("BRIDGE_CHAT_TURN_TIMEOUT", "180")))
-        with open(last) as f:
-            return f.read().strip()
-    except Exception:
-        return ""
+    with tempfile.TemporaryDirectory() as td:
+        last = os.path.join(td, "last.txt")
+        cmd = [codex, "exec", prompt]
+        if image_path:
+            cmd += ["-i", image_path]
+        cmd += ["--output-last-message", last, "-C", project,
+                "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"]
+        try:
+            subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=int(os.environ.get("BRIDGE_CHAT_TURN_TIMEOUT", "180")))
+            with open(last) as f:
+                return f.read().strip()
+        except Exception:
+            return ""
 
 
 def _default_runner(self_name):

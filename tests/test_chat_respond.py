@@ -57,6 +57,25 @@ class SpawnImageTests(unittest.TestCase):
         self.assertIn("-i", captured["cmd"])
         self.assertEqual(captured["cmd"][captured["cmd"].index("-i") + 1], image_path)
 
+    def test_spawn_codex_cleans_its_temp_dir(self):
+        # _spawn_codex writes the model's last message to a temp file; the temp
+        # directory it creates must be removed after the call (no per-pass leak),
+        # even though the reply is still returned.
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            last = cmd[cmd.index("--output-last-message") + 1]
+            captured["last"] = last
+            pathlib.Path(last).write_text("known reply")
+            return mock.Mock(returncode=0)
+
+        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
+            reply = cr._spawn_codex("do x", ".")
+
+        self.assertEqual(reply, "known reply")
+        self.assertFalse(os.path.exists(os.path.dirname(captured["last"])),
+                         "temp dir must be cleaned up (no resource leak)")
+
     def test_spawn_claude_includes_image_path_and_read_instruction_in_prompt(self):
         image_path = "/tmp/a1b2c3d4.png"
         captured = {}
