@@ -19,7 +19,6 @@ import importlib.util
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -305,16 +304,7 @@ def _spawn_claude(prompt, project, image_path=None):
         prompt = prompt + (
             "\n\n[The user attached an image at: %s — use your Read tool to view it before replying.]"
             % image_path)
-    claude = os.environ.get("CLAUDE_BIN") or "claude"
-    cmd = [claude, "-p", prompt, "--output-format", "json", "--strict-mcp-config",
-           "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "default",
-           "--allowedTools", "Read", "Grep", "Glob"]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=project,
-                           timeout=int(os.environ.get("BRIDGE_CHAT_TURN_TIMEOUT", "180")))
-        return (json.loads(r.stdout).get("result") or "").strip()
-    except Exception:
-        return ""
+    return _agent_cli.run_claude_chat(prompt, project, image_path=image_path)
 
 
 def _spawn_codex(prompt, project, image_path=None):

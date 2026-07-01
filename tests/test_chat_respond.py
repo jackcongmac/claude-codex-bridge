@@ -165,18 +165,23 @@ class SpawnImageTests(unittest.TestCase):
 
     def test_spawn_claude_includes_image_path_and_read_instruction_in_prompt(self):
         image_path = "/tmp/a1b2c3d4.png"
-        captured = {}
+        old_run = cr._agent_cli.run_claude_chat
+        seen = {}
 
-        def fake_run(cmd, **kwargs):
-            captured["cmd"] = cmd
-            return mock.Mock(stdout=json.dumps({"result": "ok"}))
+        try:
+            def fake_run(prompt, project, image_path=None):
+                seen["args"] = (prompt, project, image_path)
+                return "ok"
 
-        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
+            cr._agent_cli.run_claude_chat = fake_run
             self.assertEqual(cr._spawn_claude("prompt", str(ROOT), image_path=image_path), "ok")
+        finally:
+            cr._agent_cli.run_claude_chat = old_run
 
-        sent_prompt = captured["cmd"][captured["cmd"].index("-p") + 1]
+        sent_prompt = seen["args"][0]
         self.assertIn(image_path, sent_prompt)
         self.assertIn("Read", sent_prompt)
+        self.assertEqual(seen["args"][1:], (str(ROOT), image_path))
 
 
 class RespondOnceTests(unittest.TestCase):
