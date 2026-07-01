@@ -457,9 +457,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _content_length(self):
         try:
-            return int(self.headers.get("Content-Length", 0) or 0)
+            n = int(self.headers.get("Content-Length", 0) or 0)
         except (TypeError, ValueError):
             return 0
+        # Clamp negatives to 0: a negative Content-Length would otherwise reach
+        # rfile.read(-1), which reads the whole body to EOF and bypasses the
+        # size-before-buffer guard (a "Content-Length: -1" OOM vector).
+        return n if n > 0 else 0
 
     def do_POST(self):
         if self.path == "/send":

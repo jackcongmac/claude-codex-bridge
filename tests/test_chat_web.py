@@ -332,6 +332,36 @@ class ServerRoundTripTests(unittest.TestCase):
         finally:
             sock.close()
 
+    def test_upload_negative_content_length_not_read_all(self):
+        # A negative Content-Length must be clamped to 0 (empty body -> rejected), NOT
+        # reach rfile.read(-1) which reads to EOF and bypasses the size-before-buffer
+        # guard. We send a valid PNG body then half-close so EOF is available: pre-fix
+        # read(-1) would consume the PNG and save it (ok true); post-fix the body is
+        # treated as empty and rejected (ok false).
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            head = (
+                "POST /upload HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "X-Token: %s\r\n"
+                "Content-Type: image/png\r\n"
+                "Content-Length: -1\r\n"
+                "\r\n" % self.httpd.token
+            )
+            sock.sendall(head.encode() + self._PNG)
+            sock.shutdown(socket.SHUT_WR)   # EOF, so a buggy read(-1) would return the PNG
+            sock.settimeout(5)
+            resp = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+            text = resp.decode("latin-1").lower()
+            self.assertNotIn('"ok": true', text)   # empty body -> not a successful upload
+        finally:
+            sock.close()
+
     def test_upload_at_limit_boundary_still_reads(self):
         # a declared Content-Length exactly at the limit is not rejected as oversize;
         # it flows to magic-byte validation (a non-image body is a format error, not 413).
