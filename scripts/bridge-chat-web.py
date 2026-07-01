@@ -289,10 +289,11 @@ def participant_liveness(project, now=None):
     return out
 
 
-_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Group chat</title><style>
+_PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Group chat — __PROJECT__</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
-header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;justify-content:space-between;align-items:center}
-#close{cursor:pointer;font-size:20px;color:#bbb}#close:hover{color:#fff}
+header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:center}
+#proj{color:#9a9a9a;font-size:12px;margin-left:8px;overflow:hidden;text-overflow:ellipsis;max-width:40%;white-space:nowrap}
+#close{cursor:pointer;font-size:20px;color:#bbb;margin-left:auto}#close:hover{color:#fff}
 #log{flex:1;overflow-y:auto;padding:12px}
 #typing{min-height:20px;padding:0 14px 8px;color:#777;font-size:13px}
 #presence{min-height:18px;padding:0 14px 8px;color:#666;font-size:12px}
@@ -309,7 +310,7 @@ footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;pos
 #msg{flex:1;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:15px}
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
 </style></head><body>
-<header><b>Group chat · __SELF__</b><span id=close title=Close>✕</span></header>
+<header><b>Group chat · __SELF__</b><span id=proj title="__PROJECTPATH__">__PROJECT__</span><span id=close title=Close>✕</span></header>
 <div id=log></div>
 <div id=typing></div>
 <div id=presence></div>
@@ -419,7 +420,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             # Escape "<" when embedding JSON in <script> so a name with "</script>"
             # can't break out of the script tag.
             selfjson = json.dumps(self.server.self_name).replace("<", "\\u003c")
+            root = find_project_root(self.server.project)
+            proj_name = os.path.basename(os.path.normpath(root)) or root
             page = (_PAGE.replace("__SELF__", html.escape(self.server.self_name))
+                    .replace("__PROJECT__", html.escape(proj_name))
+                    .replace("__PROJECTPATH__", html.escape(root, quote=True))
                     .replace("__SELFJSON__", selfjson)
                     .replace("__TOKEN__", json.dumps(self.server.token)))
             self._send(200, page, "text/html")

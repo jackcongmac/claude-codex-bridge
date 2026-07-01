@@ -1,4 +1,5 @@
 import importlib.util
+import html
 import json
 import os
 import pathlib
@@ -253,6 +254,19 @@ class ServerRoundTripTests(unittest.TestCase):
             httpd.shutdown()
             httpd.server_close()
             thread.join(timeout=1)
+
+    def test_index_header_shows_project_name_with_full_path_tooltip(self):
+        page = self._get("/")
+        root = os.path.abspath(self.tmp)
+        project = os.path.basename(os.path.normpath(root)) or root
+
+        self.assertIn(
+            '<header><b>Group chat · Jack</b><span id=proj title="%s">%s</span>' % (
+                html.escape(root, quote=True),
+                html.escape(project),
+            ),
+            page,
+        )
 
     def test_send_then_messages_roundtrip(self):
         self._post("/send", {"text": "hello from the web"})
@@ -596,8 +610,9 @@ class ServerRoundTripTests(unittest.TestCase):
 
     def test_index_uses_english_public_ui(self):
         page = self._get("/")
+        project = os.path.basename(os.path.normpath(os.path.abspath(self.tmp))) or os.path.abspath(self.tmp)
 
-        self.assertIn("<title>Group chat</title>", page)
+        self.assertIn("<title>Group chat — %s</title>" % html.escape(project), page)
         self.assertIn("Group chat · Jack", page)
         self.assertIn("title=Close", page)
         self.assertIn("Type a message", page)
