@@ -448,13 +448,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # CSRF guard: a foreign page can't set this custom header without our token.
         return self.headers.get("X-Token") != self.server.token
 
+    def _stale_token(self):
+        # A failed token check almost always means the tab is stale (its token predates
+        # a server restart). Reply 403 with a message the client can surface DISTINCTLY
+        # from the format/size errors, so a "reload fixes it" 403 isn't blamed on the image.
+        self._send(403, json.dumps(
+            {"ok": False, "error": "session expired — reload the page"}))
+
+    def _content_length(self):
+        try:
+            return int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
     def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0) or 0)
-        raw = self.rfile.read(n) if n else b"{}"
         if self.path == "/send":
             if self._bad_token():
-                self._send(403, json.dumps({"ok": False, "error": "forbidden"}))
+                self._stale_token()
                 return
+            n = self._content_length()
+            raw = self.rfile.read(n) if n else b"{}"
             try:
                 data = json.loads(raw or b"{}")
                 text = (data.get("text") or "").strip()
@@ -476,12 +489,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                        json.dumps({"ok": ok, "error": None if ok else st}))
         elif self.path == "/upload":
             if self._bad_token():
-                self._send(403, json.dumps({"ok": False, "error": "forbidden"}))
+                self._stale_token()
                 return
+            import _chat_uploads
+            limit = _chat_uploads.MAX_UPLOAD_BYTES
+            # SIZE BEFORE BUFFER: reject a too-large declared body up front (413) and
+            # never pull more than limit+1 bytes off the socket, so a huge/lying
+            # Content-Length can't be buffered into memory and OOM the process.
+            n = self._content_length()
+            if n > limit:
+                self._send(413, json.dumps({"ok": False, "error": "upload too large"}))
+                return
+            raw = self.rfile.read(min(n, limit + 1)) if n else b""
             # raw is the image bytes; _chat_uploads.save_image SNIFFS the real type from the
             # bytes (the Content-Type header is only a hint) and rejects non-images / oversize.
             try:
-                import _chat_uploads
                 ref = _chat_uploads.save_image(
                     self.server.project, raw, self.headers.get("Content-Type"))
                 self._send(200, json.dumps({"ok": True, "id": ref}))
@@ -491,6 +513,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if self._bad_token():
                 self._send(403, json.dumps({"ok": False}))
                 return
+            self.rfile.read(self._content_length())
             try:
                 archived = archive_and_clear_chat(self.server.project)
             except Exception:

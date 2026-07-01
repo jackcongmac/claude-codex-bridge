@@ -270,6 +270,78 @@ class ServerRoundTripTests(unittest.TestCase):
             self._post_bytes("/upload", self._PNG, "image/png", token=False)
         self.assertEqual(cm.exception.code, 403)
 
+    def test_upload_stale_token_reports_session_expired(self):
+        # a stale token (server restart) must read as "reload the page", NOT as a
+        # bad image — the message must be distinct from format/size errors.
+        req = urllib.request.Request(
+            self.base + "/upload", data=self._PNG,
+            headers={"Content-Type": "image/png", "X-Token": "stale-token"})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(cm.exception.code, 403)
+        body = json.loads(cm.exception.read().decode())
+        self.assertFalse(body["ok"])
+        self.assertIn("session expired", body["error"])
+        self.assertIn("reload", body["error"])
+        self.assertNotIn("size", body["error"].lower())
+        self.assertNotIn("format", body["error"].lower())
+        self.assertNotIn("image", body["error"].lower())
+
+    def test_send_stale_token_reports_session_expired(self):
+        req = urllib.request.Request(
+            self.base + "/send", data=json.dumps({"text": "x"}).encode(),
+            headers={"Content-Type": "application/json", "X-Token": "stale-token"})
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(cm.exception.code, 403)
+        body = json.loads(cm.exception.read().decode())
+        self.assertFalse(body["ok"])
+        self.assertIn("session expired", body["error"])
+        self.assertIn("reload", body["error"])
+
+    def test_upload_rejects_oversize_before_buffering_body(self):
+        # A huge declared Content-Length must be rejected with 413 WITHOUT the
+        # handler blocking on a full-body read. We declare limit+1 bytes but send
+        # NO body: a size-before-buffer guard replies 413 immediately; a handler
+        # that read the declared length first would hang until the socket timed out.
+        import _chat_uploads
+        limit = _chat_uploads.MAX_UPLOAD_BYTES
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        try:
+            head = (
+                "POST /upload HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "X-Token: %s\r\n"
+                "Content-Type: image/png\r\n"
+                "Content-Length: %d\r\n"
+                "\r\n" % (self.httpd.token, limit + 1)
+            )
+            sock.sendall(head.encode())
+            sock.settimeout(5)
+            resp = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                resp += chunk
+                if b"\r\n\r\n" in resp and b"too large" in resp:
+                    break
+            text = resp.decode("latin-1")
+            self.assertIn(" 413 ", text)
+            self.assertIn("too large", text)
+        finally:
+            sock.close()
+
+    def test_upload_at_limit_boundary_still_reads(self):
+        # a declared Content-Length exactly at the limit is not rejected as oversize;
+        # it flows to magic-byte validation (a non-image body is a format error, not 413).
+        import _chat_uploads
+        limit = _chat_uploads.MAX_UPLOAD_BYTES
+        payload = self._PNG + b"\x00" * (limit - len(self._PNG))
+        resp = json.loads(
+            self._post_bytes("/upload", payload, "image/png").read().decode())
+        self.assertTrue(resp["ok"])
+
     def test_upload_rejects_non_image(self):
         resp = json.loads(
             self._post_bytes("/upload", b"<script>not an image", "image/png").read().decode())
