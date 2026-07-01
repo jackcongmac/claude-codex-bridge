@@ -188,6 +188,38 @@ class ParseChatTests(unittest.TestCase):
         self.assertIsNone(msgs[0].get("img"))
 
 
+class SessionSummaryTests(unittest.TestCase):
+    def test_summarize_chat_session_counts_span_speakers_and_salient_highlights(self):
+        long_text = "please implement compact summaries " + ("x" * 100)
+        msgs = [
+            {"ts": "2026-06-16 10:00:01 PDT", "speaker": "Jack", "text": "first"},
+            {"ts": "2026-06-16 10:00:02 PDT", "speaker": "Claude", "text": "thinking"},
+            {"ts": "2026-06-16 10:00:03 PDT", "speaker": "Jack", "text": "second"},
+            {"ts": "2026-06-16 10:00:04 PDT", "speaker": "Codex", "text": "done wiring tests"},
+            {"ts": "2026-06-16 10:00:05 PDT", "speaker": "Jack", "text": "third"},
+            {"ts": "2026-06-16 10:00:06 PDT", "speaker": "Claude", "text": "✅ 完成 archive"},
+            {"ts": "2026-06-16 10:00:07 PDT", "speaker": "Codex", "text": "完成 endpoint"},
+            {"ts": "2026-06-16 10:00:08 PDT", "speaker": "Jack", "text": long_text},
+            {"ts": "2026-06-16 10:00:09 PDT", "speaker": "Codex", "text": "  "},
+        ]
+
+        summary = cw.summarize_chat_session(msgs)
+
+        self.assertEqual(summary["count"], len(msgs))
+        self.assertEqual(summary["span"], {
+            "from": "2026-06-16 10:00:01 PDT",
+            "to": "2026-06-16 10:00:09 PDT",
+        })
+        self.assertEqual(summary["speakers"], {"Jack": 4, "Claude": 2, "Codex": 3})
+        self.assertLessEqual(len(summary["highlights"]), 6)
+        self.assertIn("Codex: done wiring tests", summary["highlights"])
+        self.assertIn("Claude: ✅ 完成 archive", summary["highlights"])
+        self.assertIn("Codex: 完成 endpoint", summary["highlights"])
+        self.assertTrue(summary["highlights"][-1].startswith(
+            "Jack: please implement compact summaries "))
+        self.assertLessEqual(len(summary["highlights"][-1]), len("Jack: ") + 80)
+
+
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -234,6 +266,14 @@ class ServerRoundTripTests(unittest.TestCase):
     def test_index_serves_html(self):
         self.assertIn("<html", self._get("/").lower())
 
+    def test_index_has_past_sessions_timeline_shell(self):
+        page = self._get("/")
+
+        self.assertIn("id=past", page)
+        self.assertIn("id=pastlist", page)
+        self.assertIn("过往会话", page)
+        self.assertIn("/sessions", page)
+
     def test_send_without_token_is_forbidden(self):
         req = urllib.request.Request(self.base + "/send",
                                      data=json.dumps({"text": "x"}).encode(),
@@ -274,6 +314,22 @@ class ServerRoundTripTests(unittest.TestCase):
         msgs = json.loads(self._get("/messages"))
         self.assertTrue(any(m["speaker"] == "Jack" and "hello from the web" in m["text"]
                             for m in msgs))
+
+    def test_sessions_endpoint_returns_persisted_sessions_most_recent_first(self):
+        collab = pathlib.Path(self.tmp) / ".collab"
+        (collab / "chat_sessions.json").write_text(json.dumps({
+            "sessions": [
+                {"ended_at": "2026-06-16 10:00:01 PDT", "count": 1, "highlights": ["old"]},
+                {"ended_at": "2026-06-16 10:00:02 PDT", "count": 2, "highlights": ["new"]},
+            ]
+        }))
+
+        sessions = json.loads(self._get("/sessions"))
+
+        self.assertEqual([s["ended_at"] for s in sessions], [
+            "2026-06-16 10:00:02 PDT",
+            "2026-06-16 10:00:01 PDT",
+        ])
 
     def test_send_persists_sent_at_and_trigger(self):
         self._post("/send", {"text": "timed", "sent_at": "2026-06-29T11:40:05",
@@ -494,6 +550,30 @@ class ServerRoundTripTests(unittest.TestCase):
             self.assertIn("<html", self._get("/").lower())
         finally:
             cw.archive_and_clear_chat = orig
+
+    def test_archive_and_clear_chat_writes_session_summary(self):
+        pathlib.Path(self.tmp, ".collab", "roles.json").write_text(json.dumps({"human": "Jack"}))
+        pathlib.Path(self.tmp, ".collab", "collaboration.md").write_text(
+            "# Board\n\n## Chat\n\n"
+            "### 2026-06-16 10:00:03 PDT\n\n**Codex:** ✅ 完成 endpoint\n\n"
+            "### 2026-06-16 10:00:02 PDT\n\n**Claude:** thinking\n\n"
+            "### 2026-06-16 10:00:01 PDT\n\n**Jack:** please keep context\n")
+
+        path = cw.archive_and_clear_chat(self.tmp)
+        sessions = json.loads(pathlib.Path(self.tmp, ".collab", "chat_sessions.json").read_text())
+
+        self.assertTrue(pathlib.Path(path).exists())
+        self.assertNotIn("## Chat", pathlib.Path(self.tmp, ".collab", "collaboration.md").read_text())
+        self.assertEqual(len(sessions["sessions"]), 1)
+        session = sessions["sessions"][0]
+        self.assertEqual(session["archive"], pathlib.Path(path).name)
+        self.assertEqual(session["count"], 3)
+        self.assertEqual(session["span"], {
+            "from": "2026-06-16 10:00:01 PDT",
+            "to": "2026-06-16 10:00:03 PDT",
+        })
+        self.assertIn("Jack: please keep context", session["highlights"])
+        self.assertIn("Codex: ✅ 完成 endpoint", session["highlights"])
 
     def test_messages_endpoint_ignores_chat_archive_lookalike_section(self):
         pathlib.Path(self.tmp, ".collab", "collaboration.md").write_text(

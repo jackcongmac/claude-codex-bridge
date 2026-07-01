@@ -156,6 +156,92 @@ def parse_chat(section):
     return msgs
 
 
+def _chat_sessions_path(paths):
+    return os.path.join(paths["dir"], "chat_sessions.json")
+
+
+def _speaker_base(speaker):
+    worker = parse_worker_speaker(speaker or "")
+    return worker[0] if worker else (speaker or "")
+
+
+def _configured_human_name(project):
+    if not project:
+        return None
+    try:
+        import _chat_roles
+        if hasattr(_chat_roles, "human_name"):
+            return _chat_roles.human_name(project)
+        return (_chat_roles.load_roles(project) or {}).get("human")
+    except Exception:
+        return None
+
+
+def _compact_line(text, limit=80):
+    compact = " ".join((text or "").split())
+    return compact[:limit]
+
+
+def _is_salient(msg, project=None):
+    text = msg.get("text") or ""
+    if not text.strip():
+        return False
+    speaker = msg.get("speaker") or ""
+    base = msg.get("speaker_base") or _speaker_base(speaker)
+    human = _configured_human_name(project)
+    if (human and speaker == human) or base not in _CHAT_PEERS:
+        return True
+    lowered = text.lower()
+    return text.lstrip().startswith("✅") or "完成" in text or "done" in lowered
+
+
+def summarize_chat_session(msgs, project=None):
+    speakers = {}
+    for msg in msgs:
+        speaker = msg.get("speaker") or "?"
+        speakers[speaker] = speakers.get(speaker, 0) + 1
+    highlights = []
+    for msg in msgs:
+        if not _is_salient(msg, project=project):
+            continue
+        highlights.append("%s: %s" % (
+            msg.get("speaker") or "?",
+            _compact_line(msg.get("text") or "")))
+    span = {"from": msgs[0].get("ts"), "to": msgs[-1].get("ts")} if msgs else {
+        "from": None, "to": None}
+    return {
+        "ended_at": now_str(),
+        "count": len(msgs),
+        "span": span,
+        "speakers": speakers,
+        "highlights": highlights[-6:],
+    }
+
+
+def _append_session_summary(paths, project, msgs, archive_path):
+    entry = summarize_chat_session(msgs, project=project)
+    entry["archive"] = os.path.basename(archive_path)
+    session_path = _chat_sessions_path(paths)
+    data = read_json(session_path, default={"sessions": []}) or {"sessions": []}
+    sessions = data.get("sessions", [])
+    if not isinstance(sessions, list):
+        sessions = []
+    sessions.append(entry)
+    atomic_write_json(session_path, {"sessions": sessions[-50:]})
+
+
+def session_summaries(project):
+    p = collab_paths(find_project_root(project))
+    try:
+        data = read_json(_chat_sessions_path(p), default={"sessions": []}) or {"sessions": []}
+    except RuntimeError:
+        return []
+    sessions = data.get("sessions", [])
+    if not isinstance(sessions, list):
+        return []
+    return list(reversed(sessions))
+
+
 def mentions(text):
     """Parse @-mentions → the set of agents explicitly named in the text:
     @All / @所有人 → both; @Claude (also '@Claude Code') / @Codex → that one; none →
@@ -208,6 +294,10 @@ def archive_and_clear_chat(project):
         for m in msgs:
             body.append("**%s** (%s):\n%s\n" % (m["speaker"], m["ts"], m["text"]))
         atomic_write(path, "\n".join(body))
+        try:
+            _append_session_summary(p, project, msgs, path)
+        except Exception:
+            pass
 
         # remove the ## Chat section from the board (keep all other sections)
         start = text.rfind("\n", 0, i)
@@ -294,6 +384,10 @@ body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:center}
 #proj{color:#9a9a9a;font-size:12px;margin-left:8px;overflow:hidden;text-overflow:ellipsis;max-width:40%;white-space:nowrap}
 #close{cursor:pointer;font-size:20px;color:#bbb;margin-left:auto}#close:hover{color:#fff}
+#past{display:none;padding:8px 12px;background:#f4f4f4;border-bottom:1px solid #ddd;color:#777;font-size:12px}
+#past summary{cursor:pointer;color:#666}#pastlist{margin-top:6px}
+.sess{padding:6px 0;border-top:1px solid #ddd}.sess:first-child{border-top:0}
+.sess .t{color:#555;font-variant-numeric:tabular-nums}.hl{color:#888;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #log{flex:1;overflow-y:auto;padding:12px}
 #typing{min-height:20px;padding:0 14px 8px;color:#777;font-size:13px}
 #presence{min-height:18px;padding:0 14px 8px;color:#666;font-size:12px}
@@ -311,6 +405,7 @@ footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;pos
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
 </style></head><body>
 <header><b>Group chat · __SELF__</b><span id=proj title="__PROJECTPATH__">__PROJECT__</span><span id=close title=Close>✕</span></header>
+<details id=past><summary>过往会话</summary><div id=pastlist></div></details>
 <div id=log></div>
 <div id=typing></div>
 <div id=presence></div>
@@ -348,6 +443,17 @@ async function load(){
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join(', ')} thinking…`:'';
   const online=st.online||st.presence||st.responders||[];
   document.getElementById('presence').textContent=online.map(r=>`${r.name}:${(r.online!==undefined?r.online:r.alive)?'online':'offline'}`).join(' · ');
+}
+async function loadSessions(){
+  const past=document.getElementById('past'),list=document.getElementById('pastlist');
+  let ss=[];try{ss=await (await fetch('/sessions')).json();}catch(e){ss=[];}
+  if(!ss.length){past.style.display='none';return;}
+  past.style.display='block';list.innerHTML='';
+  ss.forEach(s=>{const row=document.createElement('div');row.className='sess';
+    const head=document.createElement('div'),t=document.createElement('span');t.className='t';t.textContent=s.ended_at||'';
+    head.appendChild(t);head.appendChild(document.createTextNode(` · ${s.count||0} msgs`));row.appendChild(head);
+    (s.highlights||[]).forEach(h=>{const d=document.createElement('div');d.className='hl';d.textContent=h;row.appendChild(d);});
+    list.appendChild(row);});
 }
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
@@ -396,7 +502,7 @@ document.getElementById('close').onclick=async()=>{let p=null;
     if(!j.ok){throw new Error(j.error||'close failed');}p=j.archived;}catch(e){alert('Close failed, please retry');return;}
   document.body.innerHTML='<p style="padding:24px;font-family:sans-serif">Group chat closed.<span id=ar></span><br>You can close this tab.</p>';
   if(p)document.getElementById('ar').textContent=' This session was archived to: '+p;};
-load();setInterval(load,1500);
+load();loadSessions();setInterval(load,1500);
 </script></body></html>"""
 
 
@@ -430,6 +536,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._send(200, page, "text/html")
         elif self.path == "/messages":
             self._send(200, json.dumps(parse_chat(read_section(self._board(), "Chat"))))
+        elif self.path == "/sessions":
+            self._send(200, json.dumps(session_summaries(self.server.project)))
         elif self.path == "/status":
             self._send(200, json.dumps(chat_status(self.server.project)))
         elif self.path.startswith("/uploads/"):
