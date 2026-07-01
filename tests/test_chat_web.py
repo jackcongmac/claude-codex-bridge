@@ -274,6 +274,12 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("过往会话", page)
         self.assertIn("/sessions", page)
 
+    def test_index_has_send_status_shell(self):
+        page = self._get("/")
+
+        self.assertIn("id=sendstat", page)
+        self.assertIn("sendstat.fail", page)
+
     def test_send_without_token_is_forbidden(self):
         req = urllib.request.Request(self.base + "/send",
                                      data=json.dumps({"text": "x"}).encode(),
@@ -281,6 +287,9 @@ class ServerRoundTripTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as cm:
             urllib.request.urlopen(req, timeout=5)
         self.assertEqual(cm.exception.code, 403)
+        body = json.loads(cm.exception.read().decode())
+        self.assertFalse(body["ok"])
+        self.assertIn("session expired", body["error"])
 
     def test_self_name_is_html_escaped(self):
         httpd, port = cw.make_server(self.tmp, "<b>x</b>", 0)
@@ -314,6 +323,11 @@ class ServerRoundTripTests(unittest.TestCase):
         msgs = json.loads(self._get("/messages"))
         self.assertTrue(any(m["speaker"] == "Jack" and "hello from the web" in m["text"]
                             for m in msgs))
+
+    def test_send_returns_delivery_confirmable_shape(self):
+        body = json.loads(self._post("/send", {"text": "delivery shape"}))
+
+        self.assertEqual(body, {"ok": True, "error": None})
 
     def test_messages_persist_across_server_restart(self):
         self._post("/send", {"text": "survives restart"})
@@ -808,7 +822,9 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("thinking", page)
         self.assertIn("online", page)
         self.assertIn("offline", page)
-        self.assertIn("Send failed, please retry", page)
+        self.assertIn("发送中", page)
+        self.assertIn("发送失败", page)
+        self.assertIn("会话过期", page)
         self.assertIn("Close failed, please retry", page)
         self.assertIn("Image upload failed", page)
         self.assertIn("Group chat closed.", page)
@@ -816,7 +832,6 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("This session was archived to:", page)
         self.assertIn('content:"Drop to send image"', page)
         self.assertNotIn("群聊", page)
-        self.assertNotIn("发送", page)
         self.assertNotIn("说点什么", page)
         self.assertNotIn("正在思考", page)
         self.assertNotIn("在线", page)

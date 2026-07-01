@@ -396,6 +396,8 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:
 #log{flex:1;overflow-y:auto;padding:12px}
 #typing{min-height:20px;padding:0 14px 8px;color:#777;font-size:13px}
 #presence{min-height:18px;padding:0 14px 8px;color:#666;font-size:12px}
+#sendstat{min-height:18px;padding:0 14px 6px;background:#f7f7f7;color:#777;font-size:12px;text-align:right}
+#sendstat.fail{color:#b00020;cursor:pointer}
 .row{display:flex;margin:6px 0}.row.me{justify-content:flex-end}
 .who{font-size:11px;color:#888;margin:0 8px 2px}
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
@@ -408,18 +410,28 @@ footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;pos
 #at div{padding:9px 14px;cursor:pointer}#at div:hover{background:#eef}#at div.sel{background:#eef}
 #msg{flex:1;padding:9px;border:1px solid #ccc;border-radius:6px;font-size:15px}
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
+button:disabled{opacity:.55;cursor:default}
 </style></head><body>
 <header><b>Group chat · __SELF__</b><span id=proj title="__PROJECTPATH__">__PROJECT__</span><span id=close title=Close>✕</span></header>
 <details id=past><summary>过往会话</summary><div id=pastlist></div></details>
 <div id=log></div>
 <div id=typing></div>
 <div id=presence></div>
+<div id=sendstat></div>
 <footer><div id=at></div><input id=msg placeholder="Type a message…  (@ to mention)" autofocus><button id=send>Send</button></footer>
 <script>
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
 const msg=document.getElementById('msg'),AT=document.getElementById('at');
+const sendBtn=document.getElementById('send'),sendstat=document.getElementById('sendstat');
 const PEOPLE=__PEOPLEJSON__;
-let lastRender='',atSel=0;
+let lastRender='',atSel=0,sendInFlight=false,retryText='',sendstatTimer=null;
+function setSendStatus(text,fail,clickable){
+  if(sendstatTimer){clearTimeout(sendstatTimer);sendstatTimer=null;}
+  sendstat.textContent=text||'';
+  sendstat.classList.toggle('fail',!!fail);
+  if(clickable){sendstat.setAttribute('role','button');sendstat.tabIndex=0;}
+  else{sendstat.removeAttribute('role');sendstat.removeAttribute('tabindex');}
+}
 function styleAt(){AT.querySelectorAll('div[data-i]').forEach((d,i)=>d.classList.toggle('sel',i===atSel));}
 function showAt(){const m=msg.value.match(/@(\\S*)$/);
   if(!m){AT.style.display='none';return;}
@@ -463,12 +475,21 @@ async function loadSessions(){
 function nowStamp(){const d=new Date(),p=n=>String(n).padStart(2,'0');
   return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;}
 async function send(trigger){const t=document.getElementById('msg');const v=t.value;if(!v.trim())return;
+  if(sendInFlight)return;
+  sendInFlight=true;sendBtn.disabled=true;retryText='';setSendStatus('发送中…',false,false);
   t.value='';
   const body=JSON.stringify({text:v,sent_at:nowStamp(),send_trigger:trigger||'click'});
   try{const r=await fetch('/send',{method:'POST',headers:{'Content-Type':'application/json','X-Token':TOKEN},body});
-    const j=await r.json(); if(!j.ok){t.value=v; alert('Send failed, please retry');}}catch(e){t.value=v;}
+    const j=await r.json(); if(!j.ok){throw {status:r.status,error:j.error};}
+    setSendStatus('已送达',false,false);sendstatTimer=setTimeout(()=>setSendStatus('',false,false),1200);
+  }catch(e){t.value=v;retryText=v;
+    const expired=e&&e.status===403&&String(e.error||'').includes('session expired');
+    setSendStatus(expired?'会话过期,请刷新页面':'发送失败 — 点击重发',true,!expired);}
+  finally{sendInFlight=false;sendBtn.disabled=false;}
   load();}
-document.getElementById('send').onclick=()=>send('click');
+sendBtn.onclick=()=>send('click');
+sendstat.addEventListener('click',()=>{if(retryText&&sendstat.classList.contains('fail')){msg.value=retryText;send('click');}});
+sendstat.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();sendstat.click();}});
 let lastEnterAt=0;
 document.getElementById('msg').addEventListener('keydown',e=>{
   if(AT.style.display==='block'){
