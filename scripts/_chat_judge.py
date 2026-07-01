@@ -1,5 +1,6 @@
 """LLM-backed classifier for chat-triggered execution greenlights."""
 import json
+import os
 import subprocess
 
 
@@ -65,15 +66,20 @@ def _parse_json_object(raw):
     return parsed if isinstance(parsed, dict) else None
 
 
-def classify(text, context, call_llm):
+def classify(text, context, call_llm, image_path=None):
     """text: the human's latest message. context: list of prior msg dicts ({speaker,text}).
-    call_llm(prompt:str)->str: injected boundary that returns the model's raw text.
+    call_llm(prompt:str,image_path=None)->str: injected boundary that returns the model's raw text.
     Returns {"kind": "actionable"|"opinion"|"ambiguous", "task": str?, "question": str?}.
     Robust: if call_llm output can't be parsed into a valid kind, return
     {"kind":"ambiguous","question":"你是要现在就开始做吗?"} (fail safe — never guess 'actionable').
     """
+    prompt = _build_prompt(text, context)
+    if image_path:
+        prompt += (
+            "\n\n[The human attached an image at: %s — use your Read tool to view it; "
+            "it may BE the instruction.]" % image_path)
     try:
-        parsed = _parse_json_object(call_llm(_build_prompt(text, context)))
+        parsed = _parse_json_object(call_llm(prompt, image_path))
     except Exception:
         return _safe_ambiguous()
     if not parsed:
@@ -91,15 +97,22 @@ def classify(text, context, call_llm):
     return {"kind": "opinion"}
 
 
-def default_call_llm(prompt):
+def default_call_llm(prompt, image_path=None):
     """Spawn a headless model and return its stdout."""
+    claude = os.environ.get("CLAUDE_BIN") or "claude"
+    if image_path:
+        cmd = [claude, "-p", prompt, "--output-format", "json", "--strict-mcp-config",
+               "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "default",
+               "--allowedTools", "Read", "Grep", "Glob"]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        return json.loads(r.stdout).get("result") or ""
     return subprocess.run(
-        ["claude", "-p", prompt],
+        [claude, "-p", prompt],
         capture_output=True,
         text=True,
         timeout=120,
     ).stdout
 
 
-def default_judge(text, context):
-    return classify(text, context, default_call_llm)
+def default_judge(text, context, image_path=None):
+    return classify(text, context, default_call_llm, image_path=image_path)

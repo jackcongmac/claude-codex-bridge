@@ -8,7 +8,7 @@ class RunTaskTests(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.calls = []
 
-    def _impl_ok(self, project, task, findings):
+    def _impl_ok(self, project, task, findings, image_path=None):
         self.calls.append(("implement", findings))
         return {"ok": True, "head_sha": "head1", "test_summary": "5 passed"}
 
@@ -48,12 +48,33 @@ class RunTaskTests(unittest.TestCase):
 
     def test_implement_failure_reports_no_review_no_push(self):
         r = ex.run_task(self.tmp, "做 ④",
-                        implement=lambda p, t, f: {"ok": False, "head_sha": "", "test_summary": "tests red"},
+                        implement=lambda p, t, f, image_path=None: {
+                            "ok": False, "head_sha": "", "test_summary": "tests red"},
                         review=lambda p, sha: {"verdict": "GO", "note": ""},
                         push=self._push_ok)
         self.assertFalse(r["ok"])
         self.assertEqual(self.calls, [])              # no push
         self.assertIn("tests red", r["summary"])
+
+    def test_run_task_forwards_image_path_to_initial_and_fix_implements(self):
+        image_path = "/tmp/a1b2c3d4.png"
+        seen = []
+        verdicts = [{"verdict": "FIX-FIRST", "note": "missing image-based assertion"},
+                    {"verdict": "GO", "note": "ok"}]
+
+        def implement(project, task, findings, image_path=None):
+            seen.append((task, findings, image_path))
+            return {"ok": True, "head_sha": "head%d" % len(seen), "test_summary": "green"}
+
+        r = ex.run_task(self.tmp, "fix screenshot bug",
+                        implement=implement,
+                        review=lambda p, sha: verdicts.pop(0),
+                        push=self._push_ok,
+                        image_path=image_path)
+
+        self.assertTrue(r["ok"])
+        self.assertEqual([call[2] for call in seen], [image_path, image_path])
+        self.assertEqual(seen[1][1], "missing image-based assertion")
 
     def test_push_failure_reports_not_ok(self):
         r = ex.run_task(self.tmp, "做 ④",
@@ -62,6 +83,63 @@ class RunTaskTests(unittest.TestCase):
                         push=lambda p: {"ok": False, "pushed_sha": ""})
         self.assertFalse(r["ok"])
         self.assertIn("push", r["summary"].lower())
+
+    def test_run_task_executor_forwards_image_path_to_default_implement(self):
+        image_path = "/tmp/a1b2c3d4.png"
+        seen = {}
+        old_impl = ex.default_implement
+        old_review = ex.default_review
+        old_push = ex.default_push
+        try:
+            def fake_impl(project, task, findings, image_path=None):
+                seen["implement"] = (project, task, findings, image_path)
+                return {"ok": True, "head_sha": "head1", "test_summary": "green"}
+
+            ex.default_implement = fake_impl
+            ex.default_review = lambda project, head: {"verdict": "GO", "note": "ok"}
+            ex.default_push = lambda project: {"ok": True, "pushed_sha": "head1"}
+
+            r = ex.run_task_executor("fix screenshot bug", self.tmp, image_path=image_path)
+        finally:
+            ex.default_implement = old_impl
+            ex.default_review = old_review
+            ex.default_push = old_push
+
+        self.assertTrue(r["ok"])
+        self.assertEqual(seen["implement"], (self.tmp, "fix screenshot bug", "", image_path))
+
+    def test_default_implement_adds_image_flag_only_when_image_path_is_set(self):
+        old_run = ex.subprocess.run
+        old_head = ex._git_head
+        old_root = ex.find_project_root
+        captured = []
+        try:
+            heads = iter(["base1", "head1", "base2", "head2"])
+            ex._git_head = lambda project: next(heads)
+            ex.find_project_root = lambda project: project
+
+            class Result:
+                stdout = ""
+
+            def fake_run(cmd, **kwargs):
+                captured.append((cmd, kwargs))
+                return Result()
+
+            ex.subprocess.run = fake_run
+            with_image = ex.default_implement(
+                self.tmp, "fix screenshot bug", "", image_path="/tmp/a1b2c3d4.png")
+            without_image = ex.default_implement(
+                self.tmp, "fix text bug", "", image_path=None)
+        finally:
+            ex.subprocess.run = old_run
+            ex._git_head = old_head
+            ex.find_project_root = old_root
+
+        self.assertTrue(with_image["ok"])
+        self.assertTrue(without_image["ok"])
+        self.assertIn("-i", captured[0][0])
+        self.assertEqual(captured[0][0][captured[0][0].index("-i") + 1], "/tmp/a1b2c3d4.png")
+        self.assertNotIn("-i", captured[1][0])
 
 class GitHeadTests(unittest.TestCase):
     def test_git_head_returns_current_sha(self):

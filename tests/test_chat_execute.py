@@ -48,35 +48,59 @@ class DecideTests(unittest.TestCase):
 
     def test_non_human_latest_is_ignored(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "hi"), ("Codex", "我去做")),
-                      judge=lambda t, c: {"kind": "actionable", "task": t})
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": t})
         self.assertEqual(d["action"], "ignore")
 
     def test_actionable_low_risk_executes(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "把④英文化做了")),
-                      judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"})
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"})
         self.assertEqual(d["action"], "execute")
         self.assertEqual(d["task"], "做 ④ 英文化")
 
+    def test_decide_forwards_resolved_image_path_to_judge_and_decision(self):
+        uploads = os.path.join(self.tmp, ".collab", "chat_uploads")
+        os.makedirs(uploads)
+        ref = "a1b2c3d4e5f6.png"
+        image = os.path.join(uploads, ref)
+        with open(image, "wb") as f:
+            f.write(b"png")
+        seen = {}
+        msgs = [{"speaker": "Jack", "text": "fix this", "img": ref}]
+
+        def judge_fn(text, context, image_path=None):
+            seen["text"] = text
+            seen["context"] = context
+            seen["image_path"] = image_path
+            return {"kind": "actionable", "task": "fix the screenshot bug"}
+
+        d = ce.decide(self.tmp, msgs, judge=judge_fn)
+
+        self.assertEqual(d["action"], "execute")
+        self.assertEqual(d["task"], "fix the screenshot bug")
+        self.assertEqual(d["image_path"], image)
+        self.assertEqual(seen["image_path"], image)
+        self.assertEqual(seen["text"], "fix this")
+
     def test_actionable_high_risk_requests_greenlight(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "发版吧")),
-                      judge=lambda t, c: {"kind": "actionable", "task": "发版 v0.9"})
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "发版 v0.9"})
         self.assertEqual(d["action"], "request_greenlight")
 
     def test_high_risk_in_original_text_requests_greenlight_even_if_task_is_benign(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "git push --force after cleanup")),
-                      judge=lambda t, c: {"kind": "actionable", "task": "cleanup branch"})
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "cleanup branch"})
         self.assertEqual(d["action"], "request_greenlight")
         self.assertEqual(d["task"], "cleanup branch")
 
     def test_ambiguous_asks(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "④ 怎么样")),
-                      judge=lambda t, c: {"kind": "ambiguous", "question": "你是要现在做④吗?"})
+                      judge=lambda t, c, image_path=None: {"kind": "ambiguous", "question": "你是要现在做④吗?"})
         self.assertEqual(d["action"], "ask")
         self.assertIn("④", d["question"])
 
     def test_opinion_is_ignored(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "我觉得④挺重要")),
-                      judge=lambda t, c: {"kind": "opinion"})
+                      judge=lambda t, c, image_path=None: {"kind": "opinion"})
         self.assertEqual(d["action"], "ignore")
 
 class DispatchTests(unittest.TestCase):
@@ -162,8 +186,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"},
-                executor=lambda task, project: {"ok": True, "summary": "done", "commit": "abc1234"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task, project, image_path=None: {"ok": True, "summary": "done", "commit": "abc1234"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -174,13 +198,65 @@ class ExecuteOnceTests(unittest.TestCase):
         with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
             self.assertIn("abc1234", f.read())
 
+    def test_execute_once_passes_resolved_image_path_to_executor(self):
+        uploads = os.path.join(self.tmp, ".collab", "chat_uploads")
+        os.makedirs(uploads)
+        ref = "a1b2c3d4e5f6.png"
+        image = os.path.join(uploads, ref)
+        with open(image, "wb") as f:
+            f.write(b"png")
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "<!-- chat-id:image-exec img:a1b2c3d4e5f6.png -->\n"
+                "**Jack:** fix what is in the screenshot\n")
+
+        seen = {}
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "fix the screenshot bug",
+                },
+                executor=lambda task, project, image_path=None: (
+                    seen.update({"task": task, "project": project, "image_path": image_path})
+                    or {"ok": True, "summary": "done"}
+                ),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(seen["task"], "fix the screenshot bug")
+        self.assertEqual(seen["image_path"], image)
+
+    def test_execute_once_passes_none_to_executor_without_image(self):
+        seen = {}
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "plain task"},
+                executor=lambda task, project, image_path=None: (
+                    seen.update({"image_path": image_path}) or {"ok": True, "summary": "done"}
+                ),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertIsNone(seen["image_path"])
+
     def test_default_poster_formats_executor_messages_as_lead(self):
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "做 ④ 英文化"},
-                executor=lambda task, project: {"ok": True, "summary": "done"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task, project, image_path=None: {"ok": True, "summary": "done"},
                 poster=None)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -210,8 +286,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "do it"},
-                executor=lambda task, project: self.fail("executor must not re-run"),
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "do it"},
+                executor=lambda task, project, image_path=None: self.fail("executor must not re-run"),
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -233,14 +309,14 @@ class ExecuteOnceTests(unittest.TestCase):
         seen = {}
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
-            def judge(t, c):
+            def judge(t, c, image_path=None):
                 seen["text"] = t
                 return {"kind": "actionable", "task": "execute the next task"}
 
             st = ce.execute_once(
                 self.tmp,
                 judge=judge,
-                executor=lambda task, project: {"ok": True, "summary": "done"},
+                executor=lambda task, project, image_path=None: {"ok": True, "summary": "done"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -270,14 +346,14 @@ class ExecuteOnceTests(unittest.TestCase):
         seen = {}
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
-            def judge(t, c):
+            def judge(t, c, image_path=None):
                 seen["text"] = t
                 return {"kind": "actionable", "task": "second task"}
 
             st = ce.execute_once(
                 self.tmp,
                 judge=judge,
-                executor=lambda task, project: {"ok": True, "summary": "done"},
+                executor=lambda task, project, image_path=None: {"ok": True, "summary": "done"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -300,8 +376,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "execute the task"},
-                executor=lambda task, project: {"ok": True, "summary": "done"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "execute the task"},
+                executor=lambda task, project, image_path=None: {"ok": True, "summary": "done"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -320,14 +396,14 @@ class ExecuteOnceTests(unittest.TestCase):
         calls = []
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
-            def boom(task, project):
+            def boom(task, project, image_path=None):
                 calls.append(task)
                 raise RuntimeError("executor crashed after start")
 
             with self.assertRaises(RuntimeError):
                 ce.execute_once(
                     self.tmp,
-                    judge=lambda t, c: {"kind": "actionable", "task": "safe fix"},
+                    judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "safe fix"},
                     executor=boom,
                     poster=self.posts.append)
 
@@ -335,8 +411,8 @@ class ExecuteOnceTests(unittest.TestCase):
 
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "must not rerun"},
-                executor=lambda task, project: self.fail("running task must not be rerun"),
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "must not rerun"},
+                executor=lambda task, project, image_path=None: self.fail("running task must not be rerun"),
                 poster=self.posts.append)
             self.assertEqual(st, "none")
             warnings = [p for p in self.posts if "上一个任务执行中断" in p]
@@ -345,8 +421,8 @@ class ExecuteOnceTests(unittest.TestCase):
 
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "must not rerun"},
-                executor=lambda task, project: self.fail("running task must not be rerun"),
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "must not rerun"},
+                executor=lambda task, project, image_path=None: self.fail("running task must not be rerun"),
                 poster=self.posts.append)
             self.assertEqual(st, "none")
             warnings = [p for p in self.posts if "上一个任务执行中断" in p]
@@ -380,8 +456,8 @@ class ExecuteOnceTests(unittest.TestCase):
             calls = []
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "retryable task"},
-                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "retryable task"},
+                executor=lambda task, project, image_path=None: calls.append(task) or {"ok": True, "summary": "done"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -412,8 +488,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "must not run"},
-                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "wrong"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "must not run"},
+                executor=lambda task, project, image_path=None: calls.append(task) or {"ok": True, "summary": "wrong"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -448,8 +524,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "recover stale claim"},
-                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "recover stale claim"},
+                executor=lambda task, project, image_path=None: calls.append(task) or {"ok": True, "summary": "done"},
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -467,8 +543,8 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "should not execute"},
-                executor=lambda task, project: self.fail("executor must not run when busy"),
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "should not execute"},
+                executor=lambda task, project, image_path=None: self.fail("executor must not run when busy"),
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -490,15 +566,15 @@ class ExecuteOnceTests(unittest.TestCase):
         try:
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "single run"},
-                executor=lambda task, project: calls.append(task) or {"ok": True, "summary": "done"},
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "single run"},
+                executor=lambda task, project, image_path=None: calls.append(task) or {"ok": True, "summary": "done"},
                 poster=self.posts.append)
             self.assertEqual(st, "done")
 
             st = ce.execute_once(
                 self.tmp,
-                judge=lambda t, c: {"kind": "actionable", "task": "single run"},
-                executor=lambda task, project: self.fail("done task must not run twice"),
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "single run"},
+                executor=lambda task, project, image_path=None: self.fail("done task must not run twice"),
                 poster=self.posts.append)
         finally:
             os.environ.pop("BRIDGE_CHAT_EXECUTE", None)

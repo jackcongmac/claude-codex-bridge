@@ -14,9 +14,9 @@ import _chat_roles
 _DEFAULT_AGENTS = ("Codex", "Claude")   # neutral fallback when roster unknown
 
 
-def run_task(project, task, implement, review, push, max_fix_rounds=2):
+def run_task(project, task, implement, review, push, max_fix_rounds=2, image_path=None):
     findings = ""
-    impl = implement(project, task, findings)
+    impl = implement(project, task, findings, image_path)
     if not impl.get("ok"):
         return {"ok": False, "commit": "",
                 "summary": "实现失败:%s" % impl.get("test_summary", "")}
@@ -32,7 +32,7 @@ def run_task(project, task, implement, review, push, max_fix_rounds=2):
             return {"ok": False, "commit": head,
                     "summary": "互审未通过(%d 轮):%s" % (rounds, verdict.get("note", ""))}
         findings = verdict.get("note", "")
-        impl = implement(project, task, findings)
+        impl = implement(project, task, findings, image_path)
         if not impl.get("ok"):
             return {"ok": False, "commit": head,
                     "summary": "修复后实现失败:%s" % impl.get("test_summary", "")}
@@ -59,15 +59,18 @@ def _roles_for(project):
     return implementer, reviewer
 
 
-def default_implement(project, task, findings):
+def default_implement(project, task, findings, image_path=None):
     root = find_project_root(project)
     base = _git_head(root)
     prompt = (
         "Implement this task with TDD (write a failing test, make it pass), commit your work, "
         "and DO NOT push. Task: %s" % task
         + (("\n\nReviewer findings to address:\n%s" % findings) if findings else ""))
-    subprocess.run(["codex", "exec", "-s", "danger-full-access", prompt],
-                   cwd=root, capture_output=True, text=True, timeout=1800)
+    cmd = ["codex", "exec", "-s", "danger-full-access"]
+    if image_path:
+        cmd += ["-i", image_path]
+    cmd += [prompt]
+    subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=1800)
     head = _git_head(root)
     return {"ok": head != base, "head_sha": head,
             "test_summary": "see codex output"}
@@ -144,5 +147,7 @@ def default_push(project):
     return {"ok": r.returncode == 0, "pushed_sha": _git_head(root)}
 
 
-def run_task_executor(task, project):
-    return run_task(project, task, default_implement, default_review, default_push)
+def run_task_executor(task, project, image_path=None):
+    return run_task(
+        project, task, default_implement, default_review, default_push,
+        image_path=image_path)
