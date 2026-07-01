@@ -94,7 +94,7 @@ default. It stays inside the current session/terminal and does not open a browse
 1. Resolve the bridge scripts dir (first line of `~/.claude-codex-bridge/scripts_path`),
    and the project root (it needs a `.collab/` board — offer to init one if absent).
 2. Run:
-   `"$SCRIPTS/bridge-chat.sh" --self <the user's name, e.g. Jack> --project "<root>" --interactive`
+   `"$SCRIPTS/bridge-chat.sh" --self <the user's name> --project "<root>" --interactive`
    It shows the shared `## Chat` board thread as a terminal chat panel, sends on
    Enter, exits on `Esc`, and **auto-starts the Claude + Codex chat responders** so
    the room is live immediately. It also shows whether the Claude/Codex responders
@@ -107,7 +107,7 @@ default. It stays inside the current session/terminal and does not open a browse
 Optional browser view:
 
 1. If the user explicitly asks for a browser/window UI, run it in the background:
-   `"$SCRIPTS/bridge-chat-web.py" --self <the user's name, e.g. Jack> --project "<root>"`
+   `"$SCRIPTS/bridge-chat-web.py" --self <the user's name> --project "<root>"`
    It serves a local window, opens the browser, and prints the URL to use. By default
    it tries `http://127.0.0.1:8765`, but if that port is busy it falls back to a free
    local port. It **auto-starts the Claude + Codex chat responders** so the room is
