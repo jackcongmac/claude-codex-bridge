@@ -89,6 +89,16 @@ board_present() {
     || [ -f "$REPO/collaboration_state.json" ] || [ -f "$REPO/collaboration_queue.json" ]
 }
 HEAD_SHA=""
+REVIEWED_IDS=""
+REVIEWED_IDS_CAPTURED=0
+reviewed_patch_ids() {
+  git rev-list "origin/$BRANCH..$1" 2>/dev/null |
+    while read -r c; do
+      git show "$c" | git patch-id --stable
+    done |
+    awk '{print $1}' |
+    sort -u
+}
 if board_present; then
   HEAD_SHA="$(git rev-parse HEAD)"
   if [ "$NO_REVIEW" = "1" ]; then
@@ -106,6 +116,9 @@ if board_present; then
     echo "      $HERE/bridge-review.sh --self <peer> --sha $HEAD_SHA --verdict SHIP" >&2
     echo "    Or bypass (audited):  $HERE/bridge-push.sh $WHO --no-review" >&2
     exit 4
+  else
+    REVIEWED_IDS="$(reviewed_patch_ids "$HEAD_SHA")"
+    REVIEWED_IDS_CAPTURED=1
   fi
 fi
 
@@ -134,6 +147,17 @@ done
 if [ -n "$HEAD_SHA" ]; then
   PUSH_SHA="$(git rev-parse HEAD)"
   if [ "$PUSH_SHA" != "$HEAD_SHA" ]; then
+    if [ "$REVIEWED_IDS_CAPTURED" = "1" ]; then
+      PUSHED_IDS="$(reviewed_patch_ids "$PUSH_SHA")"
+      for id in $PUSHED_IDS; do
+        if ! printf '%s\n' "$REVIEWED_IDS" | grep -qxF "$id"; then
+          echo "[x] review gate: rebase changed pushed content (patch-id $id not in the reviewed set for $HEAD_SHA)." >&2
+          echo "    Re-review the rebased HEAD, then re-push:" >&2
+          echo "      $HERE/bridge-review.sh --self <peer> --sha $PUSH_SHA --verdict SHIP" >&2
+          exit 4
+        fi
+      done
+    fi
     if ! python3 "$HERE/_review.py" record --self "$WHO" --sha "$PUSH_SHA" --verdict PUSHED \
          --bypass --note "rebased from gate-approved $HEAD_SHA" --project "$REPO"; then
       echo "[x] could not record the pushed-SHA audit trace (lock busy?) — refusing to push untraceable." >&2
