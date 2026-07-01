@@ -97,6 +97,38 @@ compact "正在思考" line. Stale typing entries are hidden by age so a crashed
 does not pin the UI forever. The same status payload now reports Claude/Codex responder
 online/offline health, shown in both the web room and terminal panel.
 
+**Multimodal group chat.** `bridge-chat-web.py` accepts drag-drop and pasted image
+uploads, validates image magic bytes, caps size, prevents traversal, and lets agents
+read attached images.
+
+**@-mention keyboard navigation + IME-safe send.** The chat composer supports
+Up/Down/Enter/Tab/Esc mention navigation and avoids sending while CJK composition is
+active.
+
+**Honest presence.** `/status` reports a participant online when heartbeat is fresh
+or the chat responder is alive, with the merged view computed server-side.
+
+**Session compaction on close.** Closing a chat archives the thread and writes a
+deterministic compact summary to `chat_sessions.json`; reopening shows a past-session
+timeline via `/sessions`.
+
+**Top project bar.** The chat header shows the bound project folder name and exposes
+the full path in a tooltip.
+
+**🌟 Chat→execution (experimental, off by default).** Behind `BRIDGE_CHAT_EXECUTE=1`,
+an LLM judge classifies signed human directives; actionable low-risk work dispatches a
+sandboxed (`workspace-write`, no network) implementer, cross-review with tests
+(`FIX-FIRST` on red), signed push, and report. High-risk phrases require explicit
+human greenlight; oldest-unhandled selection, handled state machine, and a claim lock
+keep the flow safety-gated and fail-closed.
+
+**🌟 Low-latency Codex chat.** The chat responder keeps a warm Codex session with
+`codex exec resume`, reducing cold-spawn latency while preserving conversation
+context.
+
+**Actor→capability registry.** `_agent_cli.py` resolves chat, implement, and review
+spawns from the configured role instead of a hardcoded CLI.
+
 **Terminal virtual group chat.** `bridge-chat.sh --interactive` runs a no-browser
 chat panel in the current terminal, posting to the same `## Chat` board thread and
 exiting on `Esc`. In a real TTY it reads single keys; in non-TTY automation it accepts
@@ -139,10 +171,12 @@ several were lived during development.
   `recorded_by`; approving entries with an explicit `recorded_by != reviewer` mismatch
   are rejected, while legacy entries without the field still count for compatibility.
   A Codex-identified environment is rejected if it tries to record as Claude.
-- 🔴 **Identity is still not cryptographic (open — the remaining trust gap).** `join` /
-  `_handshake.py ack` / the review ledger still need stronger identity binding. The
-  `recorded_by` check blocks the common author-transcribes-peer-review footgun, but a
-  determined local actor with full shell control is still outside the trust model.
+- ✅ **Cryptographic identity (shipped).** Per-actor Ed25519 SSHSIG keys bind identity
+  to a key instead of a self-asserted name or environment variable. `scripts/_sig.py`
+  and `bridge-identity.sh` wrap `ssh-keygen -Y sign/verify`; the public registry lives
+  in `.collab/keys/allowed_signers`. The review ledger (`_review.record`) signs entries
+  and the push gate (`has_approval`) verifies them, rejecting unsigned or legacy GO.
+  The chat execution trigger requires a valid human signature.
 - **File lanes are advisory** (announced, not locked); two agents can clobber the
   same file. The push-lock serializes pushes, not working-tree edits.
 - **Release coordination is still convention** — the gate covers pushes, not GitHub
@@ -231,15 +265,14 @@ to verify: Channels is Claude-Code (not confirmed for Claude Desktop), Anthropic
 
 ## Roadmap (prioritized)
 
-1. ✅ **Mechanize trust — DONE (except identity binding).** Shipped: `bridge-post`
+1. ✅ **Mechanize trust — DONE.** Shipped: `bridge-post`
    (locked transactional board write), the review ledger + gated `bridge-push`
    (default hard-reject, audited `--no-review`), and locked `join` registration. The
    push gate is mechanically ENFORCED; and the documented workflow (README / SKILL /
    join / protocol) now routes board posts through `bridge-post` (no more hand-edit +
-   bump). **Still open:** identity binding —
-   until then `--self` is nominal, so the gate is auditable + hard but not anti-spoof
-   on its own (a determined author could self-certify as the peer). Identity binding is
-   the next trust slice.
+   bump). Cryptographic identity is now bound to per-actor Ed25519 SSHSIG keys; signed
+   review-ledger entries are verified by the push gate, and unsigned or legacy GO no
+   longer approves a push.
 2. ✅ **`bridge-live` go-live helper — bounded slice shipped.** One command
    registers the agent, starts/reuses `presence-keepalive`, reports liveness, and
    prints the exact `board-wait` ARM command. It does **not** own board-wait; the
