@@ -1,6 +1,7 @@
-import json, os, pathlib, subprocess, sys, tempfile, time, unittest
+import base64, json, os, pathlib, shutil, subprocess, sys, tempfile, time, unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import _chat_execute as ce
+import _sig
 
 def _definitely_dead_pid():
     pid = max(os.getpid() + 10000, 50000)
@@ -13,6 +14,45 @@ def _definitely_dead_pid():
             pid += 1
         else:
             pid += 1
+
+def _have_sshkeygen():
+    return shutil.which("ssh-keygen") is not None
+
+def _gen_key(path):
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "test",
+                    "-f", path], check=True, capture_output=True)
+
+def _pub_line(actor, keypath):
+    with open(keypath + ".pub") as f:
+        pub = f.read().split()
+    return "%s %s %s\n" % (actor, pub[0], pub[1])
+
+def _enroll_jack(project, keys_dir):
+    if not _have_sshkeygen():
+        raise unittest.SkipTest("ssh-keygen not available")
+    os.environ["BRIDGE_KEYS_DIR"] = keys_dir
+    os.makedirs(keys_dir)
+    key = os.path.join(keys_dir, "Jack.key")
+    _gen_key(key)
+    reg = os.path.join(project, ".collab", "keys")
+    os.makedirs(reg)
+    with open(os.path.join(reg, "allowed_signers"), "w") as f:
+        f.write(_pub_line("Jack", key))
+
+def _signed_msg(project, speaker, text, msg_id="id1", sent_at="t", img=None):
+    msg = {"speaker": speaker, "text": text, "sent_at": sent_at, "_id": msg_id}
+    if img:
+        msg["img"] = img
+    raw = _sig.sign(speaker, _sig.chat_payload(msg), project=project)
+    if not raw:
+        raise AssertionError("test signing failed for %s" % speaker)
+    msg["sig"] = base64.b64encode(raw.encode()).decode()
+    return msg
+
+def _signed_chat_line(project, speaker, text, msg_id, sent_at=None, img=None):
+    msg = _signed_msg(project, speaker, text, msg_id=msg_id, sent_at=sent_at, img=img)
+    return ce._format_chat_fn()(speaker, text, msg_id=msg_id, sent_at=sent_at,
+                                img=img, sig=msg["sig"])
 
 class HighRiskTests(unittest.TestCase):
     def test_flags_release_delete_publish(self):
@@ -38,18 +78,60 @@ class HighRiskTests(unittest.TestCase):
 class DecideTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.proj = self.tmp
+        self._old_keys_dir = os.environ.get("BRIDGE_KEYS_DIR")
+        self._old_require = os.environ.get("BRIDGE_REQUIRE_SIGNATURES")
+        os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
         os.mkdir(os.path.join(self.tmp, ".collab"))
-        import json
         with open(os.path.join(self.tmp, ".collab", "roles.json"), "w") as f:
             json.dump({"human": "Jack", "lead": "Claude"}, f)
+        _enroll_jack(self.tmp, os.path.join(self.tmp, "keys"))
+
+    def tearDown(self):
+        if self._old_keys_dir is None:
+            os.environ.pop("BRIDGE_KEYS_DIR", None)
+        else:
+            os.environ["BRIDGE_KEYS_DIR"] = self._old_keys_dir
+        if self._old_require is None:
+            os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
+        else:
+            os.environ["BRIDGE_REQUIRE_SIGNATURES"] = self._old_require
+        shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _msgs(self, *pairs):
-        return [{"speaker": s, "text": t} for s, t in pairs]
+        msgs = []
+        for i, (speaker, text) in enumerate(pairs):
+            if speaker == "Jack":
+                msgs.append(_signed_msg(
+                    self.tmp, speaker, text, msg_id="msg%d" % i, sent_at="t%d" % i))
+            else:
+                msgs.append({"speaker": speaker, "text": text})
+        return msgs
 
     def test_non_human_latest_is_ignored(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "hi"), ("Codex", "我去做")),
                       judge=lambda t, c, image_path=None: {"kind": "actionable", "task": t})
         self.assertEqual(d["action"], "ignore")
+
+    def test_unsigned_human_message_does_not_trigger(self):
+        msgs = [{"speaker": "Jack", "text": "改README", "sent_at": "t", "_id": "id1"}]
+        d = ce.decide(self.proj, msgs,
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "改README"})
+        self.assertEqual(d["action"], "ignore")
+        self.assertEqual(d.get("reason"), "unsigned-human")
+
+    def test_validly_signed_human_message_triggers(self):
+        msg = _signed_msg(self.proj, "Jack", "改README", msg_id="id1", sent_at="t")
+        d = ce.decide(self.proj, [msg],
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "改README"})
+        self.assertEqual(d["action"], "execute")
+
+    def test_signatures_disabled_allows_unsigned(self):
+        os.environ["BRIDGE_REQUIRE_SIGNATURES"] = "0"
+        msgs = [{"speaker": "Jack", "text": "改README", "sent_at": "t", "_id": "id1"}]
+        d = ce.decide(self.proj, msgs,
+                      judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "改README"})
+        self.assertEqual(d["action"], "execute")
 
     def test_actionable_low_risk_executes(self):
         d = ce.decide(self.tmp, self._msgs(("Jack", "把④英文化做了")),
@@ -65,7 +147,8 @@ class DecideTests(unittest.TestCase):
         with open(image, "wb") as f:
             f.write(b"png")
         seen = {}
-        msgs = [{"speaker": "Jack", "text": "fix this", "img": ref}]
+        msgs = [_signed_msg(self.tmp, "Jack", "fix this", msg_id="image-msg",
+                            sent_at="t", img=ref)]
 
         def judge_fn(text, context, image_path=None):
             seen["text"] = text
@@ -168,14 +251,32 @@ class ExecuteOnceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         collab = os.path.join(self.tmp, ".collab"); os.mkdir(collab)
-        import json
+        self._old_keys_dir = os.environ.get("BRIDGE_KEYS_DIR")
+        self._old_require = os.environ.get("BRIDGE_REQUIRE_SIGNATURES")
+        os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
+        _enroll_jack(self.tmp, os.path.join(self.tmp, "keys"))
         with open(os.path.join(collab, "roles.json"), "w") as f:
             json.dump({"human": "Jack", "lead": "Claude"}, f)
         with open(os.path.join(collab, "collaboration_signal.json"), "w") as f:
             json.dump({"update_id": 0}, f)
         with open(os.path.join(collab, "collaboration.md"), "w") as f:
-            f.write("# Board\n\n## Chat\n\n### 2026-06-29 10:00:00 PDT\n\n**Jack:** 把④英文化做了\n")
+            f.write("# Board\n\n## Chat\n\n### 2026-06-29 10:00:00 PDT\n\n%s\n"
+                    % self._signed_line("把④英文化做了", "default-task"))
         self.posts = []
+
+    def tearDown(self):
+        if self._old_keys_dir is None:
+            os.environ.pop("BRIDGE_KEYS_DIR", None)
+        else:
+            os.environ["BRIDGE_KEYS_DIR"] = self._old_keys_dir
+        if self._old_require is None:
+            os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
+        else:
+            os.environ["BRIDGE_REQUIRE_SIGNATURES"] = self._old_require
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _signed_line(self, text, msg_id, sent_at=None, img=None):
+        return _signed_chat_line(self.tmp, "Jack", text, msg_id, sent_at=sent_at, img=img)
 
     def test_disabled_by_default(self):
         os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
@@ -209,8 +310,9 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:image-exec img:a1b2c3d4e5f6.png -->\n"
-                "**Jack:** fix what is in the screenshot\n")
+                "%s\n" % self._signed_line(
+                    "fix what is in the screenshot", "image-exec",
+                    img="a1b2c3d4e5f6.png"))
 
         seen = {}
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
@@ -275,10 +377,10 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:greenlight-1 -->\n"
-                "**Jack:** yes, do it\n"
+                "%s\n"
                 "### 2026-06-29 09:59:00 PDT\n\n"
-                "**Claude:** waiting for your greenlight\n")
+                "**Claude:** waiting for your greenlight\n"
+                % self._signed_line("yes, do it", "greenlight-1"))
         with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
             json.dump({"handled": ["greenlight-1"]}, f)
 
@@ -303,8 +405,8 @@ class ExecuteOnceTests(unittest.TestCase):
                 "<!-- chat-id:agent-report-newer -->\n"
                 "**Claude:** ✅ 完成:previous task\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:human-greenlight-older -->\n"
-                "**Jack:** yes, execute the next task\n")
+                "%s\n" % self._signed_line(
+                    "yes, execute the next task", "human-greenlight-older"))
 
         seen = {}
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
@@ -335,11 +437,11 @@ class ExecuteOnceTests(unittest.TestCase):
                 "<!-- chat-id:agent-report-newer -->\n"
                 "**Claude:** ✅ 完成:previous task\n"
                 "### 2026-06-29 10:05:00 PDT\n\n"
-                "<!-- chat-id:human-second -->\n"
-                "**Jack:** do the second task\n"
+                "%s\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:human-first -->\n"
-                "**Jack:** do the first task\n")
+                "%s\n" % (
+                    self._signed_line("do the second task", "human-second"),
+                    self._signed_line("do the first task", "human-first")))
         with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
             json.dump({"handled": ["human-first"]}, f)
 
@@ -367,10 +469,10 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:greenlight-2 -->\n"
-                "**Jack:** yes, execute the task\n"
+                "%s\n"
                 "### 2026-06-29 09:59:00 PDT\n\n"
-                "**Claude:** waiting for your greenlight\n")
+                "**Claude:** waiting for your greenlight\n"
+                % self._signed_line("yes, execute the task", "greenlight-2"))
 
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
         try:
@@ -390,8 +492,7 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:crashy-task -->\n"
-                "**Jack:** ship the small safe fix\n")
+                "%s\n" % self._signed_line("ship the small safe fix", "crashy-task"))
 
         calls = []
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
@@ -439,8 +540,7 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:claimed-before-run -->\n"
-                "**Jack:** do a retryable task\n")
+                "%s\n" % self._signed_line("do a retryable task", "claimed-before-run"))
         with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
             json.dump({"version": 2, "messages": {
                 "claimed-before-run": {
@@ -471,8 +571,7 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:fresh-live-claim -->\n"
-                "**Jack:** do not double execute this\n")
+                "%s\n" % self._signed_line("do not double execute this", "fresh-live-claim"))
         with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
             json.dump({"version": 2, "messages": {
                 "fresh-live-claim": {
@@ -507,8 +606,7 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write(
                 "# Board\n\n## Chat\n\n"
                 "### 2026-06-29 10:00:00 PDT\n\n"
-                "<!-- chat-id:stale-live-claim -->\n"
-                "**Jack:** recover old live-pid claim\n")
+                "%s\n" % self._signed_line("recover old live-pid claim", "stale-live-claim"))
         with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json"), "w") as f:
             json.dump({"version": 2, "messages": {
                 "stale-live-claim": {

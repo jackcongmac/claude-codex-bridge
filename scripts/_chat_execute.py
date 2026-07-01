@@ -2,6 +2,8 @@
 gated, reported execution decision. LLM judgment and the write-capable executor are
 injected boundaries (see execute_once). Safe: gated behind BRIDGE_CHAT_EXECUTE=1."""
 import argparse
+import base64
+import binascii
 import hashlib
 import importlib.util as _ilu
 import os
@@ -22,6 +24,7 @@ from bridge_common import (  # noqa: E402
     release_lock,
 )
 import _chat_roles  # noqa: E402
+import _sig  # noqa: E402
 from _post import post as _board_post   # noqa: E402
 from _chat_respond import _image_path_for  # noqa: E402
 import _chat_executor  # noqa: E402
@@ -39,12 +42,27 @@ def is_high_risk(task_text):
     return bool(_HIGH_RISK.search(task_text or ""))
 
 
+def _human_sig_ok(project, msg):
+    if os.environ.get("BRIDGE_REQUIRE_SIGNATURES", "1") == "0":
+        return True
+    sig_b64 = msg.get("sig")
+    if not sig_b64:
+        return False
+    try:
+        raw = base64.b64decode(sig_b64).decode()
+    except (binascii.Error, UnicodeDecodeError, ValueError, TypeError):
+        return False
+    return _sig.verify(msg.get("speaker", ""), _sig.chat_payload(msg), raw, project=project)
+
+
 def decide(project, msgs, judge):
     if not msgs:
         return {"action": "none"}
     latest = msgs[-1]
     if not _chat_roles.is_human(latest.get("speaker", ""), project):
         return {"action": "ignore", "reason": "not-human"}
+    if not _human_sig_ok(project, latest):
+        return {"action": "ignore", "reason": "unsigned-human"}
     image_path = _image_path_for(project, latest)
     verdict = judge(latest.get("text", ""), msgs[:-1], image_path) or {}
     kind = verdict.get("kind")
