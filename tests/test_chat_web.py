@@ -315,6 +315,82 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertTrue(any(m["speaker"] == "Jack" and "hello from the web" in m["text"]
                             for m in msgs))
 
+    def test_messages_persist_across_server_restart(self):
+        self._post("/send", {"text": "survives restart"})
+
+        old_httpd, old_thread = self.httpd, self.thread
+        old_httpd.shutdown()
+        old_httpd.server_close()
+        old_thread.join(timeout=1)
+
+        self.httpd, self.port = cw.make_server(self.tmp, "Jack", 0)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.base = "http://127.0.0.1:%d" % self.port
+
+        msgs = json.loads(self._get("/messages"))
+        self.assertEqual([(m["speaker"], m["text"]) for m in msgs],
+                         [("Jack", "survives restart")])
+
+    def test_messages_refresh_recovers_full_thread(self):
+        texts = ["refresh one", "refresh two", "refresh three"]
+        for text in texts:
+            self._post("/send", {"text": text})
+
+        msgs = json.loads(self._get("/messages"))
+
+        self.assertEqual([m["text"] for m in msgs], texts)
+        self.assertEqual([m["speaker"] for m in msgs], ["Jack"] * len(texts))
+
+    def test_messages_polling_is_idempotent(self):
+        texts = ["poll one", "poll two"]
+        for text in texts:
+            self._post("/send", {"text": text})
+
+        first = json.loads(self._get("/messages"))
+        again = json.loads(self._get("/messages"))
+        third = json.loads(self._get("/messages"))
+
+        self.assertEqual(again, first)
+        self.assertEqual(third, first)
+        self.assertEqual([m["text"] for m in first], texts)
+
+    def test_send_handles_empty_text_and_malformed_json_without_500(self):
+        empty = json.loads(self._post("/send", {"text": "   \n\t  "}))
+        self.assertFalse(empty["ok"])
+        self.assertEqual(empty["error"], "empty")
+        self.assertIsInstance(json.loads(self._get("/status")), dict)
+
+        req = urllib.request.Request(
+            self.base + "/send", data=b'{"text": ',
+            headers={"Content-Type": "application/json", "X-Token": self.httpd.token})
+        try:
+            raw = urllib.request.urlopen(req, timeout=5).read().decode()
+            status = 200
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            status = e.code
+        self.assertLess(status, 500)
+        malformed = json.loads(raw)
+        self.assertFalse(malformed["ok"])
+        self.assertEqual(malformed["error"], "empty")
+        self.assertIsInstance(json.loads(self._get("/status")), dict)
+
+    def test_status_endpoint_is_live_without_participants(self):
+        status = json.loads(self._get("/status"))
+
+        self.assertEqual(set(status.keys()), {"typing", "presence", "responders", "online"})
+        self.assertEqual(status["typing"], [])
+        self.assertEqual(status["presence"], [])
+        self.assertEqual(status["responders"], [
+            {"name": "Claude", "alive": False},
+            {"name": "Codex", "alive": False},
+        ])
+        self.assertEqual(status["online"], [
+            {"name": "Claude", "online": False},
+            {"name": "Codex", "online": False},
+        ])
+
     def test_sessions_endpoint_returns_persisted_sessions_most_recent_first(self):
         collab = pathlib.Path(self.tmp) / ".collab"
         (collab / "chat_sessions.json").write_text(json.dumps({
