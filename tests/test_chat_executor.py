@@ -137,9 +137,135 @@ class RunTaskTests(unittest.TestCase):
 
         self.assertTrue(with_image["ok"])
         self.assertTrue(without_image["ok"])
-        self.assertIn("-i", captured[0][0])
-        self.assertEqual(captured[0][0][captured[0][0].index("-i") + 1], "/tmp/a1b2c3d4.png")
-        self.assertNotIn("-i", captured[1][0])
+        codex_cmds = [cmd for cmd, _kwargs in captured if cmd[:2] == ["codex", "exec"]]
+        self.assertIn("-i", codex_cmds[0])
+        self.assertEqual(codex_cmds[0][codex_cmds[0].index("-i") + 1], "/tmp/a1b2c3d4.png")
+        self.assertNotIn("-i", codex_cmds[1])
+
+    def test_default_implement_uses_workspace_write_not_danger_full_access(self):
+        old_run = ex.subprocess.run
+        old_head = ex._git_head
+        old_root = ex.find_project_root
+        captured = []
+        try:
+            heads = iter(["base", "head"])
+            ex._git_head = lambda project: next(heads)
+            ex.find_project_root = lambda project: project
+
+            class Result:
+                stdout = ""
+
+            def fake_run(cmd, **kwargs):
+                captured.append((cmd, kwargs))
+                return Result()
+
+            ex.subprocess.run = fake_run
+            r = ex.default_implement(self.tmp, "fix push bypass", "")
+        finally:
+            ex.subprocess.run = old_run
+            ex._git_head = old_head
+            ex.find_project_root = old_root
+
+        codex_cmds = [cmd for cmd, _kwargs in captured if cmd[:2] == ["codex", "exec"]]
+        self.assertTrue(r["ok"])
+        self.assertEqual(len(codex_cmds), 1)
+        self.assertIn("-s", codex_cmds[0])
+        self.assertEqual(codex_cmds[0][codex_cmds[0].index("-s") + 1], "workspace-write")
+        self.assertNotIn("danger-full-access", codex_cmds[0])
+
+    def test_default_implement_still_adds_image_flag_under_new_sandbox(self):
+        old_run = ex.subprocess.run
+        old_head = ex._git_head
+        old_root = ex.find_project_root
+        captured = []
+        try:
+            heads = iter(["base", "head"])
+            ex._git_head = lambda project: next(heads)
+            ex.find_project_root = lambda project: project
+
+            class Result:
+                stdout = ""
+
+            def fake_run(cmd, **kwargs):
+                captured.append((cmd, kwargs))
+                return Result()
+
+            ex.subprocess.run = fake_run
+            r = ex.default_implement(
+                self.tmp, "fix screenshot bug", "", image_path="/tmp/a1b2c3d4.png")
+        finally:
+            ex.subprocess.run = old_run
+            ex._git_head = old_head
+            ex.find_project_root = old_root
+
+        codex_cmds = [cmd for cmd, _kwargs in captured if cmd[:2] == ["codex", "exec"]]
+        self.assertTrue(r["ok"])
+        self.assertEqual(len(codex_cmds), 1)
+        self.assertEqual(codex_cmds[0][codex_cmds[0].index("-s") + 1], "workspace-write")
+        self.assertIn("-i", codex_cmds[0])
+        self.assertEqual(codex_cmds[0][codex_cmds[0].index("-i") + 1], "/tmp/a1b2c3d4.png")
+
+    def test_default_implement_aborts_if_implementer_moved_remote_ref(self):
+        old_head = ex._git_head
+        old_root = ex.find_project_root
+        sentinel = object()
+        old_remote = getattr(ex, "_remote_tracking_ref", sentinel)
+        old_run = ex.subprocess.run
+        try:
+            heads = iter(["base", "head"])
+            refs = ["remote-before", "remote-after"]
+            ex._git_head = lambda project: next(heads)
+            ex.find_project_root = lambda project: project
+            ex._remote_tracking_ref = lambda project: refs.pop(0)
+
+            class Result:
+                stdout = ""
+
+            ex.subprocess.run = lambda *args, **kwargs: Result()
+            r = ex.default_implement(self.tmp, "fix push bypass", "")
+        finally:
+            ex.subprocess.run = old_run
+            ex._git_head = old_head
+            ex.find_project_root = old_root
+            if old_remote is sentinel:
+                delattr(ex, "_remote_tracking_ref")
+            else:
+                ex._remote_tracking_ref = old_remote
+
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["head_sha"], "head")
+        self.assertIn("SECURITY: implementer moved the remote ref", r["test_summary"])
+
+    def test_default_implement_ok_when_remote_ref_unchanged(self):
+        old_head = ex._git_head
+        old_root = ex.find_project_root
+        sentinel = object()
+        old_remote = getattr(ex, "_remote_tracking_ref", sentinel)
+        old_run = ex.subprocess.run
+        try:
+            heads = iter(["base", "head"])
+            refs = ["remote-before", "remote-before"]
+            ex._git_head = lambda project: next(heads)
+            ex.find_project_root = lambda project: project
+            ex._remote_tracking_ref = lambda project: refs.pop(0)
+
+            class Result:
+                stdout = ""
+
+            ex.subprocess.run = lambda *args, **kwargs: Result()
+            r = ex.default_implement(self.tmp, "fix push bypass", "")
+        finally:
+            ex.subprocess.run = old_run
+            ex._git_head = old_head
+            ex.find_project_root = old_root
+            if old_remote is sentinel:
+                delattr(ex, "_remote_tracking_ref")
+            else:
+                ex._remote_tracking_ref = old_remote
+
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["head_sha"], "head")
+        self.assertEqual(refs, [])
 
 class GitHeadTests(unittest.TestCase):
     def test_git_head_returns_current_sha(self):
@@ -150,6 +276,61 @@ class GitHeadTests(unittest.TestCase):
                        check=True)
         sha = ex._git_head(d)
         self.assertRegex(sha, r"^[0-9a-f]{40}$")
+
+    def test_remote_tracking_ref_returns_upstream_sha(self):
+        old_run = ex.subprocess.run
+        try:
+            calls = []
+
+            class Result:
+                def __init__(self, stdout=""):
+                    self.stdout = stdout
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[-1] == "@{u}":
+                    return Result("refs/remotes/origin/main\n")
+                if cmd[-1] == "refs/remotes/origin/main":
+                    return Result("abc123\n")
+                return Result("")
+
+            ex.subprocess.run = fake_run
+            self.assertEqual(ex._remote_tracking_ref("/repo"), "abc123")
+        finally:
+            ex.subprocess.run = old_run
+
+        self.assertIn(
+            ["git", "-C", "/repo", "rev-parse", "--verify", "-q", "refs/remotes/origin/main"],
+            calls)
+
+    def test_remote_tracking_ref_falls_back_to_origin_current_branch(self):
+        old_run = ex.subprocess.run
+        try:
+            calls = []
+
+            class Result:
+                def __init__(self, stdout=""):
+                    self.stdout = stdout
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[-1] == "@{u}":
+                    return Result("")
+                if cmd[-2:] == ["--abbrev-ref", "HEAD"]:
+                    return Result("feature/ec2\n")
+                if cmd[-1] == "refs/remotes/origin/feature/ec2":
+                    return Result("def456\n")
+                return Result("")
+
+            ex.subprocess.run = fake_run
+            self.assertEqual(ex._remote_tracking_ref("/repo"), "def456")
+        finally:
+            ex.subprocess.run = old_run
+
+        self.assertIn(
+            ["git", "-C", "/repo", "rev-parse", "--verify", "-q",
+             "refs/remotes/origin/feature/ec2"],
+            calls)
 
 class RolesWiringTests(unittest.TestCase):
     def test_implementer_and_reviewer_roles_resolved_from_config(self):

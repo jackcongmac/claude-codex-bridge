@@ -50,6 +50,25 @@ def _git_head(project):
         capture_output=True, text=True).stdout.strip()
 
 
+def _remote_tracking_ref(root):
+    """Return the current branch's upstream sha, or origin/<branch> if no upstream is set."""
+    up = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--symbolic-full-name", "@{u}"],
+        capture_output=True, text=True)
+    name = up.stdout.strip()
+    if not name:
+        br = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True).stdout.strip()
+        name = "refs/remotes/origin/%s" % br if br else ""
+    if not name:
+        return ""
+    rr = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--verify", "-q", name],
+        capture_output=True, text=True)
+    return rr.stdout.strip()
+
+
 def _roles_for(project):
     """Return (implementer, reviewer). Reviewer = configured lead; implementer = the other
     known agent. No identity hardcoded beyond a neutral two-agent fallback."""
@@ -62,16 +81,21 @@ def _roles_for(project):
 def default_implement(project, task, findings, image_path=None):
     root = find_project_root(project)
     base = _git_head(root)
+    remote_before = _remote_tracking_ref(root)
     prompt = (
         "Implement this task with TDD (write a failing test, make it pass), commit your work, "
         "and DO NOT push. Task: %s" % task
         + (("\n\nReviewer findings to address:\n%s" % findings) if findings else ""))
-    cmd = ["codex", "exec", "-s", "danger-full-access"]
+    cmd = ["codex", "exec", "-s", "workspace-write"]
     if image_path:
         cmd += ["-i", image_path]
     cmd += [prompt]
     subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=1800)
+    remote_after = _remote_tracking_ref(root)
     head = _git_head(root)
+    if remote_before and remote_after and remote_before != remote_after:
+        return {"ok": False, "head_sha": head,
+                "test_summary": "SECURITY: implementer moved the remote ref during implement — aborting, no push"}
     return {"ok": head != base, "head_sha": head,
             "test_summary": "see codex output"}
 
