@@ -60,5 +60,11 @@ class SigTests(unittest.TestCase):
         m2 = {"speaker": "Jack", "text": "deploy NOW", "sent_at": "t", "_id": "id1"}
         self.assertNotEqual(_sig.chat_payload(m1), _sig.chat_payload(m2))
 
+class GitignoreGuardTests(unittest.TestCase):
+    def test_private_key_dir_ignored(self):
+        gi = open(".gitignore").read()
+        self.assertIn(".claude-bridge/keys", gi)
+        self.assertIn("*.key", gi)
+
 if __name__ == "__main__":
     unittest.main()

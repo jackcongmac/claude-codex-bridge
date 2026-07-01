@@ -37,3 +37,8 @@ collaboration_participants.json
 
 # Subagent-driven-development process scratch (local)
 .superpowers/
+
+# EC1/EC3 identity — never commit private signing keys
+.claude-bridge/keys/
+*.key
+!*.pub
