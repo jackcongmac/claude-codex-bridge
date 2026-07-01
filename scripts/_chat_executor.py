@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import find_project_root
 import _chat_roles
+import _agent_cli
 
 _DEFAULT_AGENTS = ("Codex", "Claude")   # neutral fallback when roster unknown
 
@@ -80,16 +81,14 @@ def _roles_for(project):
 
 def default_implement(project, task, findings, image_path=None):
     root = find_project_root(project)
+    implementer, _reviewer = _roles_for(root)
     base = _git_head(root)
     remote_before = _remote_tracking_ref(root)
     prompt = (
         "Implement this task with TDD (write a failing test, make it pass), commit your work, "
         "and DO NOT push. Task: %s" % task
         + (("\n\nReviewer findings to address:\n%s" % findings) if findings else ""))
-    cmd = ["codex", "exec", "-s", "workspace-write"]
-    if image_path:
-        cmd += ["-i", image_path]
-    cmd += [prompt]
+    cmd = _agent_cli.implement_argv(implementer, prompt, root, image_path=image_path)
     subprocess.run(cmd, cwd=root, capture_output=True, text=True, timeout=1800)
     remote_after = _remote_tracking_ref(root)
     head = _git_head(root)
@@ -97,7 +96,7 @@ def default_implement(project, task, findings, image_path=None):
         return {"ok": False, "head_sha": head,
                 "test_summary": "SECURITY: implementer moved the remote ref during implement — aborting, no push"}
     return {"ok": head != base, "head_sha": head,
-            "test_summary": "see codex output"}
+            "test_summary": "see implementer output"}
 
 
 def _parse_verdict(text):
@@ -111,8 +110,10 @@ def _parse_verdict(text):
     return (kind.upper(), note.strip())
 
 
-def _review_call_llm(prompt, root):
-    return subprocess.run(["claude", "-p", prompt], cwd=root,
+def _review_call_llm(prompt, root, reviewer=None):
+    if reviewer is None:
+        _implementer, reviewer = _roles_for(root)
+    return subprocess.run(_agent_cli.review_argv(reviewer, prompt, root), cwd=root,
                           capture_output=True, text=True, timeout=900).stdout or ""
 
 
@@ -147,7 +148,7 @@ def default_review(project, head_sha, call_llm=None, run_tests=None):
         "VERDICT: GO <one-line reason>          (only if genuinely correct AND tests passed)\n"
         "VERDICT: FIX-FIRST <one-line reason>   (otherwise)"
         % (reviewer, head_sha, head_sha, ("PASSED" if tests_ok else "FAILED")))
-    out = (call_llm or _review_call_llm)(prompt, root)
+    out = call_llm(prompt, root) if call_llm else _review_call_llm(prompt, root, reviewer)
     verdict, note = _parse_verdict(out)
     if not tests_ok:
         verdict = "FIX-FIRST"                                   # red tests never auto-GO

@@ -267,6 +267,55 @@ class RunTaskTests(unittest.TestCase):
         self.assertEqual(r["head_sha"], "head")
         self.assertEqual(refs, [])
 
+    def test_default_implement_uses_resolved_implementer_argv(self):
+        import _agent_cli
+        old_run = ex.subprocess.run
+        old_root = ex.find_project_root
+        old_head = ex._git_head
+        old_remote = ex._remote_tracking_ref
+        old_roles = ex._roles_for
+        calls = []
+        try:
+            ex.subprocess.run = lambda cmd, *a, **k: calls.append(list(cmd)) or type(
+                "R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            ex.find_project_root = lambda p: p
+            ex._git_head = lambda p: "BASE" if not calls else "HEAD2"
+            ex._remote_tracking_ref = lambda r: "R1"
+            ex._roles_for = lambda p: ("Codex", "Claude")   # implementer=Codex, reviewer=Claude
+            ex.default_implement(self.tmp, "do it", "")
+        finally:
+            ex.subprocess.run = old_run
+            ex.find_project_root = old_root
+            ex._git_head = old_head
+            ex._remote_tracking_ref = old_remote
+            ex._roles_for = old_roles
+        argv = calls[-1]
+        self.assertEqual(argv[:2], ["codex", "exec"])          # implementer Codex -> codex
+        self.assertIn("workspace-write", argv)
+
+    def test_default_implement_rotated_lead_spawns_claude(self):
+        old_run = ex.subprocess.run
+        old_root = ex.find_project_root
+        old_head = ex._git_head
+        old_remote = ex._remote_tracking_ref
+        old_roles = ex._roles_for
+        calls = []
+        try:
+            ex.subprocess.run = lambda cmd, *a, **k: calls.append(list(cmd)) or type(
+                "R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            ex.find_project_root = lambda p: p
+            ex._git_head = lambda p: "BASE" if not calls else "HEAD2"
+            ex._remote_tracking_ref = lambda r: "R1"
+            ex._roles_for = lambda p: ("Claude", "Codex")   # ROTATED: implementer=Claude
+            ex.default_implement(self.tmp, "do it", "")
+        finally:
+            ex.subprocess.run = old_run
+            ex.find_project_root = old_root
+            ex._git_head = old_head
+            ex._remote_tracking_ref = old_remote
+            ex._roles_for = old_roles
+        self.assertEqual(calls[-1][0], "claude")               # implementer Claude -> claude
+
 class GitHeadTests(unittest.TestCase):
     def test_git_head_returns_current_sha(self):
         d = tempfile.mkdtemp()
@@ -412,6 +461,35 @@ class DefaultReviewRecordTests(unittest.TestCase):
 
         self.assertEqual(v["verdict"], "FIX-FIRST")
         self.assertIn("could not record review: actor_mismatch", v.get("note", ""))
+
+    def test_default_review_uses_resolved_reviewer_argv(self):
+        import _review
+        old_run = ex.subprocess.run
+        old_root = ex.find_project_root
+        old_roles = ex._roles_for
+        old_record = _review.record
+        old_latest = _review.latest_verdict
+        calls = []
+        try:
+            ex.subprocess.run = lambda cmd, *a, **k: calls.append(list(cmd)) or type(
+                "R", (), {"returncode": 0, "stdout": "VERDICT: GO codex review", "stderr": ""})()
+            ex.find_project_root = lambda p: p
+            ex._roles_for = lambda p: ("Claude", "Codex")   # reviewer=Codex
+            _review.record = lambda *a, **kw: "ok"
+            _review.latest_verdict = lambda *a, **kw: {"verdict": "GO", "note": "codex review"}
+
+            v = ex.default_review(self._proj(), "deadbeefcafe7890",
+                                  run_tests=lambda root: True)
+        finally:
+            ex.subprocess.run = old_run
+            ex.find_project_root = old_root
+            ex._roles_for = old_roles
+            _review.record = old_record
+            _review.latest_verdict = old_latest
+
+        self.assertEqual(v["verdict"], "GO")
+        self.assertEqual(calls[-1][:2], ["codex", "exec"])
+        self.assertIn("read-only", calls[-1])
 
 
 class RunTestsGateTests(unittest.TestCase):
