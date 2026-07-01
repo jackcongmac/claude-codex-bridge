@@ -11,6 +11,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import _chat_respond as cr  # noqa: E402
+import _agent_cli  # noqa: E402
 from bridge_common import read_section  # noqa: E402
 
 
@@ -41,40 +42,126 @@ class ImagePathResolverTests(unittest.TestCase):
 
 
 class SpawnImageTests(unittest.TestCase):
-    def test_spawn_codex_includes_image_flag_when_image_path_is_provided(self):
+    def _patch_agent_cli_run(self, fake_run):
+        if not hasattr(_agent_cli, "subprocess"):
+            self.addCleanup(lambda: delattr(_agent_cli, "subprocess"))
+            _agent_cli.subprocess = type("SubprocessStub", (), {
+                "run": fake_run,
+                "SubprocessError": Exception,
+            })()
+            return
+        old_run = _agent_cli.subprocess.run
+        _agent_cli.subprocess.run = fake_run
+        self.addCleanup(lambda: setattr(_agent_cli.subprocess, "run", old_run))
+
+    def test_run_codex_chat_includes_image_flag_when_image_path_is_provided(self):
         image_path = "/tmp/a1b2c3d4.png"
+        proj = tempfile.mkdtemp()
+        os.makedirs(os.path.join(proj, ".collab"))
         captured = {}
 
         def fake_run(cmd, **kwargs):
             captured["cmd"] = cmd
             last = cmd[cmd.index("--output-last-message") + 1]
             pathlib.Path(last).write_text("ok")
-            return mock.Mock()
+            return mock.Mock(returncode=0, stdout=json.dumps({
+                "type": "thread.started", "thread_id": "tid-img"}))
 
-        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
-            self.assertEqual(cr._spawn_codex("prompt", str(ROOT), image_path=image_path), "ok")
+        self._patch_agent_cli_run(fake_run)
+        self.assertEqual(_agent_cli.run_codex_chat("prompt", proj, image_path=image_path), "ok")
 
         self.assertIn("-i", captured["cmd"])
         self.assertEqual(captured["cmd"][captured["cmd"].index("-i") + 1], image_path)
 
-    def test_spawn_codex_cleans_its_temp_dir(self):
-        # _spawn_codex writes the model's last message to a temp file; the temp
+    def test_run_codex_chat_cleans_its_temp_dir(self):
+        # run_codex_chat writes the model's last message to a temp file; the temp
         # directory it creates must be removed after the call (no per-pass leak),
         # even though the reply is still returned.
+        proj = tempfile.mkdtemp()
+        os.makedirs(os.path.join(proj, ".collab"))
         captured = {}
 
         def fake_run(cmd, **kwargs):
             last = cmd[cmd.index("--output-last-message") + 1]
             captured["last"] = last
             pathlib.Path(last).write_text("known reply")
-            return mock.Mock(returncode=0)
+            return mock.Mock(returncode=0, stdout=json.dumps({
+                "type": "thread.started", "thread_id": "tid-clean"}))
 
-        with mock.patch.object(cr.subprocess, "run", side_effect=fake_run):
-            reply = cr._spawn_codex("do x", ".")
+        self._patch_agent_cli_run(fake_run)
+        reply = _agent_cli.run_codex_chat("do x", proj)
 
         self.assertEqual(reply, "known reply")
         self.assertFalse(os.path.exists(os.path.dirname(captured["last"])),
                          "temp dir must be cleaned up (no resource leak)")
+
+    def test_spawn_codex_delegates_to_agent_cli_preserving_signature(self):
+        old_run = cr._agent_cli.run_codex_chat
+        seen = {}
+        try:
+            def fake_run(prompt, project, image_path=None):
+                seen["args"] = (prompt, project, image_path)
+                return "delegated"
+
+            cr._agent_cli.run_codex_chat = fake_run
+            self.assertEqual(cr._spawn_codex("prompt", "/tmp/project", image_path="/tmp/x.png"),
+                             "delegated")
+        finally:
+            cr._agent_cli.run_codex_chat = old_run
+
+        self.assertEqual(seen["args"], ("prompt", "/tmp/project", "/tmp/x.png"))
+
+    def test_codex_chat_fresh_captures_thread_id_then_resumes(self):
+        proj = tempfile.mkdtemp(); os.makedirs(os.path.join(proj, ".collab"))
+        calls = []
+        def fake_run(cmd, *a, **k):
+            calls.append((list(cmd), k))
+            # write the reply file (--output-last-message)
+            if "--output-last-message" in cmd:
+                pathlib.Path(cmd[cmd.index("--output-last-message")+1]).write_text("hi from codex")
+            # fresh run emits --json thread.started on stdout
+            out = ""
+            if "--json" in cmd:
+                out = json.dumps({"type":"thread.started","thread_id":"tid-1"}) + "\n"
+            return type("R",(),{"returncode":0,"stdout":out,"stderr":""})()
+        self._patch_agent_cli_run(fake_run)
+        r1 = _agent_cli.run_codex_chat("hello", proj)
+        self.assertEqual(r1, "hi from codex")
+        self.assertIn("--json", calls[-1][0])
+        with open(os.path.join(proj, ".collab", ".codex_chat_session")) as f:
+            self.assertEqual(json.load(f)["session_id"], "tid-1")
+        self.assertEqual(getattr(calls[-1][1]["stdin"], "name", ""), os.devnull)
+        self.assertIn("timeout", calls[-1][1])
+        # second call resumes tid-1
+        calls.clear()
+        _agent_cli.run_codex_chat("again", proj)
+        self.assertIn("resume", calls[-1][0]); self.assertIn("tid-1", calls[-1][0])
+
+    def test_codex_chat_resume_failure_drops_session_and_retries_fresh_once(self):
+        proj = tempfile.mkdtemp(); os.makedirs(os.path.join(proj, ".collab"))
+        session = os.path.join(proj, ".collab", ".codex_chat_session")
+        pathlib.Path(session).write_text(json.dumps({"session_id": "stale-tid"}))
+        calls = []
+
+        def fake_run(cmd, *a, **k):
+            calls.append(list(cmd))
+            if "resume" in cmd:
+                return type("R", (), {"returncode": 42, "stdout": "", "stderr": "stale"})()
+            if "--output-last-message" in cmd:
+                pathlib.Path(cmd[cmd.index("--output-last-message") + 1]).write_text("fresh reply")
+            return type("R", (), {
+                "returncode": 0,
+                "stdout": json.dumps({"type": "thread.started", "thread_id": "tid-2"}) + "\n",
+                "stderr": "",
+            })()
+
+        self._patch_agent_cli_run(fake_run)
+
+        self.assertEqual(_agent_cli.run_codex_chat("recover", proj), "fresh reply")
+        self.assertEqual(calls[0][:4], ["codex", "exec", "resume", "stale-tid"])
+        self.assertIn("--json", calls[1])
+        self.assertNotIn("resume", calls[1])
+        self.assertEqual(json.loads(pathlib.Path(session).read_text())["session_id"], "tid-2")
 
     def test_spawn_claude_includes_image_path_and_read_instruction_in_prompt(self):
         image_path = "/tmp/a1b2c3d4.png"

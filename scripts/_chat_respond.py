@@ -21,7 +21,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import (  # noqa: E402
@@ -29,6 +28,7 @@ from bridge_common import (  # noqa: E402
     acquire_lock, release_lock,
 )
 from _post import post as _board_post  # noqa: E402
+import _agent_cli  # noqa: E402
 
 # reuse parse_chat + mentions from the (hyphen-named) web-chat module
 _spec = importlib.util.spec_from_file_location(
@@ -308,21 +308,7 @@ def _spawn_claude(prompt, project, image_path=None):
 
 
 def _spawn_codex(prompt, project, image_path=None):
-    codex = os.environ.get("CODEX_BIN") or "codex"
-    with tempfile.TemporaryDirectory() as td:
-        last = os.path.join(td, "last.txt")
-        cmd = [codex, "exec", prompt]
-        if image_path:
-            cmd += ["-i", image_path]
-        cmd += ["--output-last-message", last, "-C", project,
-                "--skip-git-repo-check", "--ignore-user-config", "-s", "read-only"]
-        try:
-            subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=int(os.environ.get("BRIDGE_CHAT_TURN_TIMEOUT", "180")))
-            with open(last) as f:
-                return f.read().strip()
-        except Exception:
-            return ""
+    return _agent_cli.run_codex_chat(prompt, project, image_path=image_path)
 
 
 def _default_runner(self_name):
