@@ -9,6 +9,7 @@ board-wait. Pure stdlib — no install, no deps.
 CLI: bridge-chat-web.py [--self <Me>] [--project DIR] [--port N] [--no-open]
 """
 import argparse
+import base64
 import errno
 import html
 import http.server
@@ -30,6 +31,7 @@ from bridge_common import (  # noqa: E402
 )
 from _post import post as _board_post  # noqa: E402
 from _liveness import verdict as liveness_verdict  # noqa: E402
+import _sig  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
@@ -486,12 +488,28 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if not text and not img:
                 self._send(200, json.dumps({"ok": False, "error": "empty"}))
                 return
+            msg_id = secrets.token_hex(8)
+            sent_at = _clean_sent_at(data.get("sent_at"))
+            canonical_text = sanitize_chat_text(text)
+            msg_like = {
+                "speaker": self.server.self_name,
+                "text": canonical_text,
+                "sent_at": sent_at,
+                "_id": msg_id,
+            }
+            raw_sig = _sig.sign(
+                self.server.self_name,
+                _sig.chat_payload(msg_like),
+                project=self.server.project)
+            sig = base64.b64encode(raw_sig.encode()).decode() if raw_sig else None
             st = _board_post(
                 self.server.project, self.server.self_name,
-                format_chat_message(self.server.self_name, text,
-                                    sent_at=data.get("sent_at"),
+                format_chat_message(self.server.self_name, canonical_text,
+                                    msg_id=msg_id,
+                                    sent_at=sent_at,
                                     send_trigger=data.get("send_trigger"),
-                                    img=img),
+                                    img=img,
+                                    sig=sig),
                 section="Chat")
             ok = (st == "ok")
             self._send(200 if ok else 503,

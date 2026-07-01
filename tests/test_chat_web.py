@@ -2,7 +2,9 @@ import importlib.util
 import json
 import os
 import pathlib
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -25,6 +27,21 @@ _spec.loader.exec_module(cw)
 
 def _stamp(epoch):
     return time.strftime("%Y-%m-%d %H:%M:%S PDT", time.localtime(epoch))
+
+
+def _have_sshkeygen():
+    return shutil.which("ssh-keygen") is not None
+
+
+def _gen_key(path):
+    subprocess.run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "test",
+                    "-f", path], check=True, capture_output=True)
+
+
+def _pub_line(actor, keypath):
+    with open(keypath + ".pub") as f:
+        pub = f.read().split()
+    return "%s %s %s\n" % (actor, pub[0], pub[1])
 
 
 class ResponderWrapperTests(unittest.TestCase):
@@ -173,6 +190,7 @@ class ParseChatTests(unittest.TestCase):
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self._old_keys_dir = os.environ.get("BRIDGE_KEYS_DIR")
         collab = pathlib.Path(self.tmp) / ".collab"
         collab.mkdir()
         (collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
@@ -186,6 +204,10 @@ class ServerRoundTripTests(unittest.TestCase):
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=1)
+        if self._old_keys_dir is None:
+            os.environ.pop("BRIDGE_KEYS_DIR", None)
+        else:
+            os.environ["BRIDGE_KEYS_DIR"] = self._old_keys_dir
 
     def _get(self, path):
         return urllib.request.urlopen(self.base + path, timeout=5).read().decode()
@@ -195,6 +217,18 @@ class ServerRoundTripTests(unittest.TestCase):
             self.base + path, data=json.dumps(data).encode(),
             headers={"Content-Type": "application/json", "X-Token": self.httpd.token})
         return urllib.request.urlopen(req, timeout=5).read().decode()
+
+    def _enroll_jack_key(self):
+        if not _have_sshkeygen():
+            self.skipTest("ssh-keygen not available")
+        keys = pathlib.Path(self.tmp) / "keys"
+        keys.mkdir()
+        key = keys / "Jack.key"
+        os.environ["BRIDGE_KEYS_DIR"] = str(keys)
+        _gen_key(str(key))
+        registry = pathlib.Path(self.tmp) / ".collab" / "keys"
+        registry.mkdir()
+        (registry / "allowed_signers").write_text(_pub_line("Jack", str(key)))
 
     def test_index_serves_html(self):
         self.assertIn("<html", self._get("/").lower())
@@ -235,6 +269,21 @@ class ServerRoundTripTests(unittest.TestCase):
         m = next(m for m in msgs if "timed" in m["text"])
         self.assertEqual(m["sent_at"], "2026-06-29T11:40:05")
         self.assertEqual(m["send_trigger"], "enter")
+
+    def test_send_signs_human_message(self):
+        import base64
+        import _sig
+        self._enroll_jack_key()
+        self._post("/send", {"text": "please refactor", "sent_at": "2026-06-30T10:00:00",
+                             "send_trigger": "click"})
+        time.sleep(0.2)
+        board = pathlib.Path(self.tmp, ".collab", "collaboration.md")
+        msgs = cw.parse_chat(read_section(board, "Chat"))
+        m = msgs[-1]
+        self.assertEqual(m["speaker"], "Jack")
+        self.assertTrue(m.get("sig"))
+        raw = base64.b64decode(m["sig"]).decode()
+        self.assertTrue(_sig.verify("Jack", _sig.chat_payload(m), raw, project=self.tmp))
 
     def test_send_drops_invalid_trigger_and_sent_at(self):
         # untrusted client values must be whitelisted/format-checked, not stored raw
