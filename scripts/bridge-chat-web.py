@@ -401,6 +401,9 @@ header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:
 .row{display:flex;margin:6px 0}.row.me{justify-content:flex-end}
 .who{font-size:11px;color:#888;margin:0 8px 2px}
 .bubble{max-width:70%;padding:8px 11px;border-radius:8px;background:#fff;white-space:pre-wrap;word-break:break-word}
+.bubble ul,.bubble ol{margin:4px 0;padding-left:20px}.bubble li{margin:2px 0}
+.bubble code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:rgba(0,0,0,.08);border-radius:4px;padding:1px 4px}
+.bubble strong{font-weight:700}
 .me .bubble{background:#95ec69}
 .time{font-size:10px;color:#b2b2b2;margin:2px 8px 0}.me .time{text-align:right}
 .cimg{max-width:220px;max-height:220px;border-radius:6px;display:block;margin-top:4px;cursor:zoom-in}
@@ -432,6 +435,34 @@ function setSendStatus(text,fail,clickable){
   if(clickable){sendstat.setAttribute('role','button');sendstat.tabIndex=0;}
   else{sendstat.removeAttribute('role');sendstat.removeAttribute('tabindex');}
 }
+function renderMd(text){
+  let s=String(text||'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;');
+  s=s
+    .replace(/`([^`\\n]+?)`/g,'<code>$1</code>')
+    .replace(/\\*\\*([^*\\n]+?)\\*\\*/g,'<strong>$1</strong>');
+  const out=[];
+  let list=null;
+  const closeList=()=>{if(list){out.push(`</${list}>`);list=null;}};
+  s.split(/\\n/).forEach((line,i,lines)=>{
+    const bullet=line.match(/^\\s*(?:- |• )(.*)$/);
+    const numbered=line.match(/^\\s*\\d+\\. (.*)$/);
+    if(bullet||numbered){
+      const kind=bullet?'ul':'ol';
+      if(list!==kind){closeList();out.push(`<${kind}>`);list=kind;}
+      out.push(`<li>${bullet?bullet[1]:numbered[1]}</li>`);
+      return;
+    }
+    closeList();
+    out.push(line);
+    if(i<lines.length-1)out.push('<br>');
+  });
+  closeList();
+  return out.join('');
+}
 function styleAt(){AT.querySelectorAll('div[data-i]').forEach((d,i)=>d.classList.toggle('sel',i===atSel));}
 function showAt(){const m=msg.value.match(/@(\\S*)$/);
   if(!m){AT.style.display='none';return;}
@@ -453,7 +484,7 @@ async function load(){
     const atBottom=log.scrollHeight-log.scrollTop-log.clientHeight<60;
     log.innerHTML=ms.map(m=>`<div class="row ${m.speaker===SELF?'me':''}"><div><div class=who></div><div class=bubble></div><div class=time></div></div></div>`).join('');
     const whos=log.querySelectorAll('.who'),bubs=log.querySelectorAll('.bubble'),tms=log.querySelectorAll('.time');
-    ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].textContent=m.text;tms[i].textContent=fmtTime(m);
+    ms.forEach((m,i)=>{whos[i].textContent=m.speaker;bubs[i].innerHTML=renderMd(m.text);tms[i].textContent=fmtTime(m);
       if(m.img){const im=document.createElement('img');im.className='cimg';im.src='/uploads/'+m.img;im.onclick=()=>window.open(im.src);bubs[i].appendChild(im);}});
     if(atBottom)log.scrollTop=log.scrollHeight;
   }

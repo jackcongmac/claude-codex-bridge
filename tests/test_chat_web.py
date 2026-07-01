@@ -495,6 +495,17 @@ class ServerRoundTripTests(unittest.TestCase):
         page = self._get("/")
         self.assertIn("class=time", page)
 
+    def test_index_wires_bubbles_through_markdown_renderer(self):
+        page = self._get("/")
+
+        self.assertIn("function renderMd(text)", page)
+        self.assertIn("bubs[i].innerHTML=renderMd(m.text)", page)
+
+    def test_index_markdown_renderer_escapes_html_before_rendering(self):
+        page = self._get("/")
+
+        self.assertIn(".replace(/</g,'&lt;')", page)
+
     _PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + b"\x00" * 32)
 
     def _post_bytes(self, path, raw, ctype, token=True):
