@@ -3,7 +3,7 @@
 import json
 import os
 
-from bridge_common import collab_paths, find_project_root, read_json
+from bridge_common import collab_paths, find_project_root
 
 DEFAULTS = {"human": "Human", "lead": ""}
 DEFAULT_AGENTS = ("Claude", "Codex")
@@ -49,30 +49,17 @@ def _append_unique(out, seen, name, human):
     out.append(name)
 
 
-def _participant_names(project):
-    root = find_project_root(project)
-    try:
-        data = read_json(collab_paths(root)["participants"], default={"participants": []})
-    except RuntimeError:
-        data = {"participants": []}
-    participants = data.get("participants", []) if isinstance(data, dict) else []
-    if not isinstance(participants, list):
-        return []
-    return [p.get("name") for p in participants if isinstance(p, dict)]
-
-
 def chat_peers(project):
     """Ordered, de-duplicated agent roster for the chat, NEVER empty."""
     roles = load_roles(project)
     human = roles.get("human")
     configured = roles.get("agents")
+    # Registry auto-detect needs persistent agents distinguished from ephemeral workers.
     base = configured if isinstance(configured, list) and configured else list(DEFAULT_AGENTS)
 
     out = []
     seen = set()
     for name in base:
-        _append_unique(out, seen, name, human)
-    for name in _participant_names(project):
         _append_unique(out, seen, name, human)
 
     if not out:

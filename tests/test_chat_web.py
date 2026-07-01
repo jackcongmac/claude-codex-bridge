@@ -391,25 +391,28 @@ class ServerRoundTripTests(unittest.TestCase):
             {"name": "Codex", "online": False},
         ])
 
-    def test_status_includes_registered_dynamic_agent(self):
+    def test_status_ignores_registered_agent_not_in_default_roster(self):
         pathlib.Path(self.tmp, ".collab", "roles.json").write_text(json.dumps({"human": "Jack"}))
         pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
             "participants": [
                 {"name": "Claude", "last_seen": cw.now_str()},
                 {"name": "Codex", "last_seen": cw.now_str()},
-                {"name": "Dana", "last_seen": cw.now_str()},
+                {"name": "Codex-2", "last_seen": cw.now_str()},
                 {"name": "Jack", "last_seen": cw.now_str()},
             ]
         }))
 
         status = json.loads(self._get("/status"))
 
-        self.assertEqual([row["name"] for row in status["presence"]], ["Claude", "Codex", "Dana"])
-        self.assertEqual([row["name"] for row in status["responders"]], ["Claude", "Codex", "Dana"])
-        self.assertEqual([row["name"] for row in status["online"]], ["Claude", "Codex", "Dana"])
+        self.assertEqual([row["name"] for row in status["presence"]], ["Claude", "Codex"])
+        self.assertEqual([row["name"] for row in status["responders"]], ["Claude", "Codex"])
+        self.assertEqual([row["name"] for row in status["online"]], ["Claude", "Codex"])
 
-    def test_responder_cmds_use_dynamic_chat_peers(self):
-        pathlib.Path(self.tmp, ".collab", "roles.json").write_text(json.dumps({"human": "Jack"}))
+    def test_responder_cmds_use_configured_chat_peers(self):
+        pathlib.Path(self.tmp, ".collab", "roles.json").write_text(json.dumps({
+            "human": "Jack",
+            "agents": ["Alice", "Bob"],
+        }))
         pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
             "participants": [{"name": "Dana"}, {"name": "Jack"}]
         }))
@@ -417,7 +420,7 @@ class ServerRoundTripTests(unittest.TestCase):
         cmds = cw.responder_cmds("/scripts", self.tmp)
 
         self.assertEqual([c[c.index("--self") + 1] for c in cmds],
-                         ["Claude", "Codex", "Dana"])
+                         ["Alice", "Bob"])
 
     def test_sessions_endpoint_returns_persisted_sessions_most_recent_first(self):
         collab = pathlib.Path(self.tmp) / ".collab"

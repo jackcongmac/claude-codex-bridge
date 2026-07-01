@@ -30,14 +30,19 @@ class ChatRolesTests(unittest.TestCase):
             f.write("{not json")
         self.assertEqual(cr.load_roles(self.tmp), {"human": "Human", "lead": ""})
 
-    def test_chat_peers_defaults_to_claude_codex_without_config_or_participants(self):
-        self._participants([])
+    def test_chat_peers_defaults_to_exact_claude_codex_and_ignores_registry(self):
+        self._participants([
+            {"name": "Claude"},
+            {"name": "Codex"},
+            {"name": "Codex-2"},
+            {"name": "Jack"},
+        ])
 
         self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex"))
 
     def test_chat_peers_current_setup_resolves_exact_default_agents(self):
         self._write({"human": "Jack", "lead": "Claude"})
-        self._participants([{"name": "Claude"}, {"name": "Codex"}])
+        self._participants([{"name": "Claude"}, {"name": "Codex"}, {"name": "Codex-2"}])
 
         self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex"))
 
@@ -46,29 +51,32 @@ class ChatRolesTests(unittest.TestCase):
 
         self.assertEqual(cr.chat_peers(self.tmp), ("Alice", "Bob"))
 
-    def test_chat_peers_unions_non_human_participants_deduped(self):
-        self._write({"human": "Jack"})
+    def test_chat_peers_ignores_registered_participant_not_in_config(self):
+        self._write({"human": "Jack", "agents": ["Alice", "Bob"]})
         self._participants([
-            {"name": "Claude"},
             {"name": "Dana"},
-            {"name": "Codex"},
-            {"name": "Dana"},
+            {"name": "Alice"},
+            {"name": "Bob"},
             {"name": "Jack"},
         ])
 
-        self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex", "Dana"))
+        self.assertEqual(cr.chat_peers(self.tmp), ("Alice", "Bob"))
 
-    def test_chat_peers_never_includes_human_from_config_or_participants(self):
+    def test_chat_peers_never_includes_human_from_config(self):
         self._write({"human": "Jack", "agents": ["Jack", "Dana"]})
-        self._participants([{"name": "Jack"}])
+        self._participants([{"name": "Jack"}, {"name": "Codex-2"}])
 
         self.assertEqual(cr.chat_peers(self.tmp), ("Dana",))
 
-    def test_chat_peers_tolerates_missing_or_malformed_participants(self):
+    def test_chat_peers_tolerates_missing_or_malformed_roster_sources(self):
         self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex"))
 
         with open(os.path.join(self.tmp, ".collab", "collaboration_participants.json"), "w") as f:
             f.write("{not json")
+
+        self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex"))
+
+        self._write({"human": "Jack", "agents": [None, ""]})
 
         self.assertEqual(cr.chat_peers(self.tmp), ("Claude", "Codex"))
 
