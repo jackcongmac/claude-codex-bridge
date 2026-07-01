@@ -151,6 +151,15 @@ class ParseChatTests(unittest.TestCase):
         self.assertEqual(msgs[0]["img"], "a1b2c3d4e5f6.png")
         self.assertEqual(msgs[0]["text"], "look")
 
+    def test_format_and_parse_roundtrip_sig(self):
+        import base64
+        fake_sig = base64.b64encode(
+            b"-----BEGIN SSH SIGNATURE-----\nx\n-----END SSH SIGNATURE-----\n").decode()
+        line = cw.format_chat_message("Jack", "hello", sig=fake_sig)
+        section = "### 2026-06-30 10:00:00 PDT\n\n" + line
+        msgs = cw.parse_chat(section)
+        self.assertEqual(msgs[-1]["sig"], fake_sig)
+
     def test_parse_chat_drops_malformed_image_ref(self):
         # an image ref that isn't a safe <hex>.<ext> must not survive parsing
         section = (

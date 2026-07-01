@@ -85,7 +85,7 @@ def parse_worker_speaker(speaker):
     return (m.group("base"), m.group("nonce")) if m else None
 
 
-def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=None, img=None):
+def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=None, img=None, sig=None):
     msg_id = msg_id or secrets.token_hex(8)
     attrs = ""
     sent_at = _clean_sent_at(sent_at)
@@ -97,6 +97,8 @@ def format_chat_message(speaker, text, msg_id=None, sent_at=None, send_trigger=N
         attrs += " trigger:%s" % send_trigger
     if img:
         attrs += " img:%s" % img
+    if sig:
+        attrs += " sig:%s" % sig
     return "<!-- chat-id:%s%s -->\n**%s:** %s" % (
         msg_id, attrs, speaker, sanitize_chat_text(text))
 
@@ -128,12 +130,15 @@ def parse_chat(section):
         sent_at = _clean_sent_at(attrs.get("sent_at"))
         send_trigger = _clean_trigger(attrs.get("trigger"))
         img = _clean_img(attrs.get("img"))
+        sig = attrs.get("sig")
         if sent_at:
             msg["sent_at"] = sent_at
         if send_trigger:
             msg["send_trigger"] = send_trigger
         if img:
             msg["img"] = img
+        if sig:
+            msg["sig"] = sig
         msgs.append(msg)
     msgs.reverse()   # board stores newest-first
     counts = {}
