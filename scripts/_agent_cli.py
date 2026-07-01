@@ -22,9 +22,17 @@ def claude_bin():
 def chat_argv(actor, prompt, project, image_path=None, session_id=None):
     if actor == "Codex":
         if session_id:
-            argv = [codex_bin(), "exec", "resume", session_id]
-        else:
-            argv = [codex_bin(), "exec", "--json"]
+            # `codex exec resume` does NOT accept -s/--sandbox or -C/--cd — those belong to
+            # the ORIGINAL session and passing them here makes resume error out (which would
+            # silently fall back to a fresh, context-less session). Keep the resume argv to
+            # the flags resume actually accepts; sandbox + cwd are inherited from the session.
+            argv = [codex_bin(), "exec", "resume", session_id,
+                    "--skip-git-repo-check", "--ignore-user-config"]
+            if image_path:
+                argv += ["-i", image_path]
+            argv += [prompt]
+            return argv
+        argv = [codex_bin(), "exec", "--json"]
         if image_path:
             argv += ["-i", image_path]
         argv += ["-C", project, "--skip-git-repo-check", "--ignore-user-config",

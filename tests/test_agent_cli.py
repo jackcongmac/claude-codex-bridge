@@ -15,6 +15,15 @@ class ArgvTests(unittest.TestCase):
         self.assertEqual(a[:3], ["codex", "exec", "resume"])
         self.assertIn("abc-123", a)
 
+    def test_codex_resume_omits_sandbox_and_cd_flags(self):
+        # `codex exec resume` rejects -s/--sandbox and -C/--cd (they belong to the original
+        # session). Including them makes resume error -> silent fallback to a fresh,
+        # context-less session. Guard against that regression.
+        a = ac.chat_argv("Codex", "hi", ".", session_id="abc-123")
+        self.assertNotIn("-s", a)
+        self.assertNotIn("--sandbox", a)
+        self.assertNotIn("-C", a)
+
     def test_codex_chat_carries_image(self):
         a = ac.chat_argv("Codex", "hi", ".", image_path="/tmp/x.png")
         self.assertIn("-i", a); self.assertIn("/tmp/x.png", a)
