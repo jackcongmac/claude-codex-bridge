@@ -29,6 +29,7 @@ from bridge_common import (  # noqa: E402
 )
 from _post import post as _board_post  # noqa: E402
 import _agent_cli  # noqa: E402
+import _chat_roles  # noqa: E402
 
 # reuse parse_chat + mentions from the (hyphen-named) web-chat module
 _spec = importlib.util.spec_from_file_location(
@@ -38,7 +39,7 @@ _spec.loader.exec_module(_cw)
 parse_chat, mentions = _cw.parse_chat, _cw.mentions
 format_chat_message = _cw.format_chat_message
 
-AGENTS = {"Claude", "Codex"}
+DEFAULT_AGENTS = _chat_roles.DEFAULT_AGENTS
 
 
 def _speaker_base(msg):
@@ -139,7 +140,7 @@ def _handled_ids(delivery, self_name):
     return set(handled.keys()) if isinstance(handled, dict) else set()
 
 
-def _mark_delivery(project, self_name, msg, status):
+def _mark_delivery(project, self_name, msg, status, agents=None):
     p = collab_paths(project)
     if not acquire_lock(p["lock"], "chat-delivery-%d" % os.getpid(), ttl=30, wait=10):
         return
@@ -150,7 +151,7 @@ def _mark_delivery(project, self_name, msg, status):
             "ts": msg.get("ts", ""),
             "speaker": msg.get("speaker", ""),
             "text": msg.get("text", ""),
-            "targets": sorted(_targets(msg)),
+            "targets": sorted(_targets(msg, agents)),
         }
         if msg.get("_id"):
             delivery["messages"][mid]["id"] = msg.get("_id")
@@ -203,16 +204,17 @@ def _clear_typing(project, self_name):
         release_lock(p["lock"], "chat-typing-%d" % os.getpid())
 
 
-def _targets(msg):
+def _targets(msg, agents=None):
     """Who MUST reply to this message:
     - a HUMAN message with NO @ is a group message → everyone (both agents) replies;
     - @X → X (the other agent may simply stay quiet);
     - an AGENT message compels a reply ONLY via an explicit @, so two agents don't
       ping-pong forever on plain chatter (you watch them; they @ you when they want you).
     """
-    who = mentions(msg.get("text", ""))
-    if not who and _speaker_base(msg) not in AGENTS:
-        return set(AGENTS)
+    agents = tuple(agents or DEFAULT_AGENTS)
+    who = mentions(msg.get("text", ""), peers=agents)
+    if not who and _speaker_base(msg) not in agents:
+        return set(agents)
     return who
 
 
@@ -220,20 +222,20 @@ def _self_spoke_after(msgs, idx, self_name):
     return any(_speaker_base(m) == self_name for m in msgs[idx + 1:])
 
 
-def _select_pending_prompt(msgs, self_name, handled):
+def _select_pending_prompt(msgs, self_name, handled, agents):
     infer_handled_from_board = not handled
     for idx, msg in enumerate(msgs):
         if _speaker_base(msg) == self_name:
             continue
         if _message_id(msg) in handled:
             continue
-        if (self_name in _targets(msg)
+        if (self_name in _targets(msg, agents)
                 and not (infer_handled_from_board and _self_spoke_after(msgs, idx, self_name))):
             return msg
     return None
 
 
-def _select_prompt(msgs, self_name, handled=None):
+def _select_prompt(msgs, self_name, handled=None, agents=None):
     """Return (prompt_msg, status) for the current pass.
 
     Normally the latest message is the prompt. The exception is trailing agent chatter
@@ -243,34 +245,42 @@ def _select_prompt(msgs, self_name, handled=None):
     older missed prompts so an offline @ message does not sink behind later chat.
     """
     handled = handled or set()
-    pending = _select_pending_prompt(msgs, self_name, handled)
+    agents = tuple(agents or DEFAULT_AGENTS)
+    pending = _select_pending_prompt(msgs, self_name, handled, agents)
     if pending is not None:
         return pending, None
     latest = msgs[-1]
     if _speaker_base(latest) == self_name:
         return None, "self"
-    if self_name in _targets(latest) and _message_id(latest) not in handled:
+    if self_name in _targets(latest, agents) and _message_id(latest) not in handled:
         return latest, None
-    if _speaker_base(latest) not in AGENTS or _targets(latest):
+    if _speaker_base(latest) not in agents or _targets(latest, agents):
         return None, "not-addressed"
 
     spoke_after = False
     for msg in reversed(msgs[:-1]):
         if _speaker_base(msg) == self_name:
             spoke_after = True
-        if _speaker_base(msg) in AGENTS and not _targets(msg):
+        if _speaker_base(msg) in agents and not _targets(msg, agents):
             continue
-        if self_name in _targets(msg) and not spoke_after and _message_id(msg) not in handled:
+        if self_name in _targets(msg, agents) and not spoke_after and _message_id(msg) not in handled:
             return msg, None
         return None, "not-addressed"
     return None, "not-addressed"
 
 
-def _prompt(self_name, msgs, prompt_msg):
-    other = "Codex" if self_name == "Claude" else "Claude"
+def _prompt(self_name, msgs, prompt_msg, agents=None):
+    agents = tuple(agents or DEFAULT_AGENTS)
     convo = "\n".join("%s: %s" % (m["speaker"], m["text"]) for m in msgs)
+    if agents == DEFAULT_AGENTS:
+        identity = "one of two AI agents (Claude, Codex)"
+        other = "Codex" if self_name == "Claude" else "Claude"
+    else:
+        identity = "one of the AI agents (%s)" % ", ".join(agents)
+        other_agents = [name for name in agents if name != self_name]
+        other = other_agents[0] if other_agents else "another agent"
     return (
-        "You are %s, one of two AI agents (Claude, Codex) in a group chat with the "
+        "You are %s, %s in a group chat with the "
         "human. Reply BRIEFLY (1-3 sentences) to this message, which is addressed "
         "to you. If you have nothing useful to add, reply with exactly: PASS\n\n"
         "DO NOT @-mention the other agent (@%s) unless you genuinely need them to act "
@@ -286,7 +296,7 @@ def _prompt(self_name, msgs, prompt_msg):
         "interactive pane, not here. State this plainly instead of claiming you will "
         "write code.\n\n"
         "Message to answer:\n%s: %s\n\nConversation so far:\n%s\n\nYour reply as %s:"
-        % (self_name, other, self_name,
+        % (self_name, identity, other, self_name,
            prompt_msg["speaker"], prompt_msg["text"], convo, self_name))
 
 
@@ -326,18 +336,20 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     if os.environ.get("BRIDGE_CHAT_AUTORESPOND") != "1":
         return "disabled"
     project = find_project_root(project)
+    agents = _chat_roles.chat_peers(project)
     p = collab_paths(project)
     msgs = parse_chat(_chat_section(p["board"]))
     if not msgs:
         return "empty"
     latest = msgs[-1]
     delivery = _load_delivery(project)
-    prompt_msg, status = _select_prompt(msgs, self_name, _handled_ids(delivery, self_name))
+    prompt_msg, status = _select_prompt(
+        msgs, self_name, _handled_ids(delivery, self_name), agents=agents)
     if status:
         return status
     streak = 0                                  # consecutive trailing agent messages
     for m in reversed(msgs):
-        if _speaker_base(m) in AGENTS:
+        if _speaker_base(m) in agents:
             streak += 1
         else:
             break
@@ -347,11 +359,11 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     try:
         image_path = _image_path_for(project, prompt_msg)
         reply = ((runner or _default_runner(self_name))(
-            _prompt(self_name, msgs, prompt_msg), project, image_path) or "").strip()
+            _prompt(self_name, msgs, prompt_msg, agents=agents), project, image_path) or "").strip()
     finally:
         _clear_typing(project, self_name)
     if not reply or reply.upper() == "PASS":
-        _mark_delivery(project, self_name, prompt_msg, "passed")
+        _mark_delivery(project, self_name, prompt_msg, "passed", agents=agents)
         return "passed"
     # Spawning the agent took seconds. If a newer message landed meanwhile, this reply
     # is stale — drop it rather than bury the new message under our answer. The guard
@@ -369,7 +381,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
         # newer message is a fresh prompt addressed to ME — the loop will answer it
         # instead. If it's the other agent's parallel reply or chatter not for me, my
         # answer to the original prompt is still valid, so post it (replies may interleave).
-        return not (_speaker_base(newest) != self_name and self_name in _targets(newest))
+        return not (_speaker_base(newest) != self_name and self_name in _targets(newest, agents))
 
     st = _board_post(project, self_name, format_chat_message(self_name, reply),
                      section="Chat", guard=_guard)
@@ -380,7 +392,7 @@ def respond_once(project, self_name, max_turns=6, runner=None):
     # on the board (signal_failed just missed the wake, which the next bump fixes).
     if st == "lockbusy":
         return "lockbusy"
-    _mark_delivery(project, self_name, prompt_msg, "responded")
+    _mark_delivery(project, self_name, prompt_msg, "responded", agents=agents)
     return "responded"
 
 

@@ -265,6 +265,25 @@ class RespondOnceTests(unittest.TestCase):
         self._set_chat([("Jack", "@Codex go"), ("Codex", "我先看看代码")])
         self.assertEqual(self._run("Claude"), "not-addressed")
 
+    def test_configured_agent_no_at_chatter_does_not_compel_reply(self):
+        (self.collab / "roles.json").write_text(json.dumps({
+            "human": "Jack",
+            "agents": ["Alice", "Bob"],
+        }))
+        self._set_chat([("Jack", "@Alice go"), ("Alice", "checking")])
+
+        self.assertEqual(self._run("Bob"), "not-addressed")
+
+    def test_configured_agents_are_targets_for_human_group_messages(self):
+        (self.collab / "roles.json").write_text(json.dumps({
+            "human": "Jack",
+            "agents": ["Alice", "Bob"],
+        }))
+        self._set_chat([("Jack", "team check")])
+
+        self.assertEqual(self._run("Alice", reply="here"), "responded")
+        self.assertIn("**Alice:** here", self._chat_text())
+
     def test_worker_agent_chatter_without_at_does_not_compel_a_reply(self):
         self._set_chat([("Jack", "@Codex go"), ("Codex (worker a1b2c3)", "running tests")])
 

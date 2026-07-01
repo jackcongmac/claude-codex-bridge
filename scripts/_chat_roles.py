@@ -3,9 +3,10 @@
 import json
 import os
 
-from bridge_common import collab_paths, find_project_root
+from bridge_common import collab_paths, find_project_root, read_json
 
 DEFAULTS = {"human": "Human", "lead": ""}
+DEFAULT_AGENTS = ("Claude", "Codex")
 
 
 def roles_path(project):
@@ -23,12 +24,60 @@ def load_roles(project):
         for key in ("human", "lead"):
             if isinstance(data.get(key), str) and data[key]:
                 out[key] = data[key]
+        agents = data.get("agents")
+        if isinstance(agents, list) and agents:
+            out["agents"] = [a for a in agents if isinstance(a, str) and a]
     return out
 
 
+def human_name(project):
+    return load_roles(project)["human"]
+
+
 def is_human(speaker, project):
-    return bool(speaker) and speaker == load_roles(project)["human"]
+    return bool(speaker) and speaker == human_name(project)
 
 
 def lead_name(project):
     return load_roles(project)["lead"]
+
+
+def _append_unique(out, seen, name, human):
+    if not isinstance(name, str) or not name or name == human or name in seen:
+        return
+    seen.add(name)
+    out.append(name)
+
+
+def _participant_names(project):
+    root = find_project_root(project)
+    try:
+        data = read_json(collab_paths(root)["participants"], default={"participants": []})
+    except RuntimeError:
+        data = {"participants": []}
+    participants = data.get("participants", []) if isinstance(data, dict) else []
+    if not isinstance(participants, list):
+        return []
+    return [p.get("name") for p in participants if isinstance(p, dict)]
+
+
+def chat_peers(project):
+    """Ordered, de-duplicated agent roster for the chat, NEVER empty."""
+    roles = load_roles(project)
+    human = roles.get("human")
+    configured = roles.get("agents")
+    base = configured if isinstance(configured, list) and configured else list(DEFAULT_AGENTS)
+
+    out = []
+    seen = set()
+    for name in base:
+        _append_unique(out, seen, name, human)
+    for name in _participant_names(project):
+        _append_unique(out, seen, name, human)
+
+    if not out:
+        for name in DEFAULT_AGENTS:
+            _append_unique(out, seen, name, human)
+    if not out:
+        return DEFAULT_AGENTS
+    return tuple(out)

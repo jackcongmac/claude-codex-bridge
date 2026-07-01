@@ -32,6 +32,7 @@ from bridge_common import (  # noqa: E402
 from _post import post as _board_post  # noqa: E402
 from _liveness import verdict as liveness_verdict  # noqa: E402
 import _sig  # noqa: E402
+import _chat_roles  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
@@ -47,7 +48,7 @@ _SENT_AT_RE = re.compile(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$')
 # An image ref is a server-generated "<hex>.<ext>" — the SAME safe shape _chat_uploads
 # enforces, re-checked here so a hand-edited board can't smuggle a path into an <img src>.
 _IMG_RE = re.compile(r'^[0-9a-f]{8,}\.(?:png|jpg|gif|webp)$')
-_CHAT_PEERS = ("Claude", "Codex")
+_CHAT_PEERS = _chat_roles.DEFAULT_AGENTS
 _LIVE_VERDICTS = {"REACTIVE", "PRESENT"}
 
 
@@ -165,14 +166,15 @@ def _speaker_base(speaker):
     return worker[0] if worker else (speaker or "")
 
 
+def _chat_peers(project):
+    return _chat_roles.chat_peers(project) if project else _CHAT_PEERS
+
+
 def _configured_human_name(project):
     if not project:
         return None
     try:
-        import _chat_roles
-        if hasattr(_chat_roles, "human_name"):
-            return _chat_roles.human_name(project)
-        return (_chat_roles.load_roles(project) or {}).get("human")
+        return _chat_roles.human_name(project)
     except Exception:
         return None
 
@@ -189,7 +191,7 @@ def _is_salient(msg, project=None):
     speaker = msg.get("speaker") or ""
     base = msg.get("speaker_base") or _speaker_base(speaker)
     human = _configured_human_name(project)
-    if (human and speaker == human) or base not in _CHAT_PEERS:
+    if (human and speaker == human) or base not in _chat_peers(project):
         return True
     lowered = text.lower()
     return text.lstrip().startswith("✅") or "完成" in text or "done" in lowered
@@ -242,7 +244,7 @@ def session_summaries(project):
     return list(reversed(sessions))
 
 
-def mentions(text):
+def mentions(text, peers=None):
     """Parse @-mentions → the set of agents explicitly named in the text:
     @All / @所有人 → both; @Claude (also '@Claude Code') / @Codex → that one; none →
     empty set. (This is just the parser; who is compelled to reply — including a human's
@@ -251,14 +253,15 @@ def mentions(text):
     # must end at a boundary (\b / not a CJK char) — so "a@codex.io", "@clauded",
     # "@codexical", "@所有人类" are NOT mentions.
     t = text or ""
+    peers = tuple(peers or _CHAT_PEERS)
     if (re.search(r'(?<![\w@])@all\b', t, re.I)
             or re.search(r'(?<![\w@])@所有人(?![一-鿿])', t)):
-        return {"Claude", "Codex"}
+        return set(peers)
     who = set()
-    if re.search(r'(?<![\w@])@claude\b', t, re.I):
-        who.add("Claude")
-    if re.search(r'(?<![\w@])@codex\b', t, re.I):
-        who.add("Codex")
+    for name in peers:
+        pattern = r'claude(?:\s+code)?' if name.lower() == "claude" else re.escape(name)
+        if re.search(r'(?<![\w@])@%s(?=$|[^\w一-鿿])' % pattern, t, re.I):
+            who.add(name)
     return who
 
 
@@ -328,6 +331,7 @@ def _typing_active(info, now=None):
 
 def chat_status(project, now=None):
     p = collab_paths(find_project_root(project))
+    peers = _chat_peers(project)
     try:
         state = read_json(p["chat_typing"], default={"agents": {}}) or {"agents": {}}
     except RuntimeError:
@@ -339,18 +343,19 @@ def chat_status(project, now=None):
         agents = {}
     typing = sorted(name for name, info in agents.items() if _typing_active(info, now=now))
     responders = [{"name": name, "alive": responder_owner_alive(project, name)}
-                  for name in _CHAT_PEERS]
+                  for name in peers]
     presence_rows = participant_liveness(project, now=now)
     pres_alive = {row["name"]: bool(row.get("alive")) for row in presence_rows}
     resp_alive = {row["name"]: bool(row.get("alive")) for row in responders}
     online = [{"name": name, "online": pres_alive.get(name, False) or resp_alive.get(name, False)}
-              for name in _CHAT_PEERS]
+              for name in peers]
     return {"typing": typing, "presence": presence_rows,
             "responders": responders, "online": online}
 
 
 def participant_liveness(project, now=None):
     project = find_project_root(project)
+    peers = _chat_peers(project)
     p = collab_paths(project)
     try:
         reg = read_json(p["participants"], default={"participants": []}) or {"participants": []}
@@ -367,7 +372,7 @@ def participant_liveness(project, now=None):
     if not rows:
         return []
     out = []
-    for name in _CHAT_PEERS:
+    for name in peers:
         row = rows.get(name)
         if not row:
             out.append({"name": name, "alive": False, "verdict": "OFFLINE",
@@ -413,7 +418,7 @@ button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c
 <script>
 const SELF=__SELFJSON__,TOKEN=__TOKEN__;
 const msg=document.getElementById('msg'),AT=document.getElementById('at');
-const PEOPLE=[['Claude','@Claude '],['Codex','@Codex '],['All','@All ']];
+const PEOPLE=__PEOPLEJSON__;
 let lastRender='',atSel=0;
 function styleAt(){AT.querySelectorAll('div[data-i]').forEach((d,i)=>d.classList.toggle('sel',i===atSel));}
 function showAt(){const m=msg.value.match(/@(\\S*)$/);
@@ -528,10 +533,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             selfjson = json.dumps(self.server.self_name).replace("<", "\\u003c")
             root = find_project_root(self.server.project)
             proj_name = os.path.basename(os.path.normpath(root)) or root
+            people = [[name, "@%s " % name] for name in _chat_peers(self.server.project)]
+            people.append(["All", "@All "])
+            peoplejson = json.dumps(people).replace("<", "\\u003c")
             page = (_PAGE.replace("__SELF__", html.escape(self.server.self_name))
                     .replace("__PROJECT__", html.escape(proj_name))
                     .replace("__PROJECTPATH__", html.escape(root, quote=True))
                     .replace("__SELFJSON__", selfjson)
+                    .replace("__PEOPLEJSON__", peoplejson)
                     .replace("__TOKEN__", json.dumps(self.server.token)))
             self._send(200, page, "text/html")
         elif self.path == "/messages":
@@ -666,10 +675,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
 
 def responder_cmds(scripts_dir, project):
-    """The two background commands that make the room live: one chat auto-responder
-    per agent. Their own single-instance mutex makes a duplicate launch a quiet no-op."""
+    """Background commands that make the room live: one chat auto-responder per agent.
+    Their own single-instance mutex makes a duplicate launch a quiet no-op."""
     sh = os.path.join(scripts_dir, "bridge-chat-respond.sh")
-    return [[sh, "--self", who, "--project", project] for who in ("Claude", "Codex")]
+    return [[sh, "--self", who, "--project", project] for who in _chat_peers(project)]
 
 
 def start_responders(project, scripts_dir=None, spawn=None):
@@ -842,7 +851,8 @@ def main():
     supervisor = None
     supervisor_interval = float(os.environ.get("BRIDGE_CHAT_RESPONDER_SUPERVISE_INTERVAL", "5"))
     if responders:
-        print("已自动拉起 Claude / Codex 自动应答器:@ 谁谁就回(@All 两个都回)。")
+        print("已自动拉起 %s 自动应答器:@ 谁谁就回(@All 全部都回)。" %
+              " / ".join(_chat_peers(httpd.project)))
         supervisor = threading.Thread(
             target=supervise_responders,
             args=(responders, httpd.project, supervisor_stop),
