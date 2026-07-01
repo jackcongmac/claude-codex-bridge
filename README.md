@@ -110,6 +110,29 @@ to let Codex *talk to a reasoning Claude*, this project wraps `claude -p`
 > injected into from outside. Persistent session + shared `collaboration.md` +
 > on-demand reach gives you ~90% of "online colleague" without that.
 
+## Group chat
+
+Two front-ends post to the same `## Chat` board thread:
+
+- `scripts/bridge-chat-web.py` opens a local browser window, defaulting to
+  `http://127.0.0.1:8765`.
+- `scripts/bridge-chat.sh --interactive` opens a terminal chat panel.
+
+Agents reply through per-agent responders (`scripts/bridge-chat-respond.sh`),
+kept warm with session resume (`codex exec resume` / `claude -p --resume`) for
+low-latency, context-carrying replies.
+
+Shipped chat UX includes drag-drop and paste image attachments that agents can
+read, `@`-mention with keyboard navigation, IME-safe send, honest online/offline
+presence, message send status (`sending` / `delivered` / `failed-retry`),
+markdown-rendered bubbles, a top project bar with folder name and path, and
+session compaction on close with a past-sessions timeline on reopen.
+
+Experimental chat-to-execution is off by default behind `BRIDGE_CHAT_EXECUTE=1`:
+a judge classifies a signed human directive, then runs a sandboxed implement →
+cross-review → signed-push pipeline. High-risk actions require an explicit human
+greenlight; the path is safety-gated and fail-closed.
+
 ## Prerequisites
 
 - [Claude Code](https://docs.claude.com/claude-code) CLI (`claude`) — logged in
@@ -414,6 +437,18 @@ instead — it returns as soon as a newline arrives.
   to your comfort level.
 - Never commit your real `~/.codex/config.toml` — it may contain API keys for
   other MCP servers. This repo only ships a config *template* via the installer.
+- Review-before-merge is mechanically gated: `scripts/bridge-push.sh` refuses to
+  push a commit with no peer `SHIP`/`GO` recorded in the review ledger
+  (`scripts/_review.py`); `--no-review` is audited.
+- **Cryptographic identity (SSHSIG).** Per-actor Ed25519 keys are managed through
+  `scripts/bridge-identity.sh` and `scripts/_sig.py`, using
+  `ssh-keygen -Y sign/verify` and the public registry at
+  `.collab/keys/allowed_signers`. The review ledger signs entries, the push gate
+  verifies them and rejects unsigned or legacy `GO`, and the chat execution
+  trigger requires a valid human signature. Identity is a key, not a
+  self-asserted name.
+- The push gate also checks a rebased commit's content by patch-id, so a rebase
+  that changes what ships is rejected for re-review.
 
 ## License
 
