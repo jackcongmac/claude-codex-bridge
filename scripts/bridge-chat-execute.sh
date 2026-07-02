@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Signal-driven supervisor for the chat-driven executor. OFF unless
-# BRIDGE_CHAT_EXECUTE=1; while disabled, each pass is a cheap no-op.
+# Always-on supervisor for chat-driven capture/execution.
+# Records signed human requirements to ISSUES.md every pass; code execution is
+# gated behind BRIDGE_CHAT_EXECUTE=1.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT="$PWD"
@@ -46,7 +47,7 @@ trap 'cleanup_pidfile; exit 0' INT TERM
 
 field() { _S="$SIGNAL" _K="$1" "$PY3" -c "import json,os;print(json.load(open(os.environ['_S'])).get(os.environ['_K'],''))" 2>/dev/null || echo ""; }
 
-echo "[*] chat execute supervisor armed (project=$PROJECT, interval=${INTERVAL}s). Ctrl-C to stop."
+echo "[*] chat capture/execution supervisor armed (project=$PROJECT, interval=${INTERVAL}s). Records signed requirements; code execution needs BRIDGE_CHAT_EXECUTE=1. Ctrl-C to stop."
 LAST=""
 while true; do
   UID_NOW="$(field update_id)"

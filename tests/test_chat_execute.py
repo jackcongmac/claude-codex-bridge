@@ -411,7 +411,9 @@ class ExecuteOnceTests(unittest.TestCase):
         collab = os.path.join(self.tmp, ".collab"); os.mkdir(collab)
         self._old_keys_dir = os.environ.get("BRIDGE_KEYS_DIR")
         self._old_require = os.environ.get("BRIDGE_REQUIRE_SIGNATURES")
+        self._old_execute = os.environ.get("BRIDGE_CHAT_EXECUTE")
         os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
+        os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
         _enroll_jack(self.tmp, os.path.join(self.tmp, "keys"))
         with open(os.path.join(collab, "roles.json"), "w") as f:
             json.dump({"human": "Jack", "lead": "Claude"}, f)
@@ -431,14 +433,186 @@ class ExecuteOnceTests(unittest.TestCase):
             os.environ.pop("BRIDGE_REQUIRE_SIGNATURES", None)
         else:
             os.environ["BRIDGE_REQUIRE_SIGNATURES"] = self._old_require
+        if self._old_execute is None:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+        else:
+            os.environ["BRIDGE_CHAT_EXECUTE"] = self._old_execute
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _signed_line(self, text, msg_id, sent_at=None, img=None):
         return _signed_chat_line(self.tmp, "Jack", text, msg_id, sent_at=sent_at, img=img)
 
-    def test_disabled_by_default(self):
-        os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
-        self.assertEqual(ce.execute_once(self.tmp), "disabled")
+    def test_without_judge_returns_none_when_execute_flag_off(self):
+        self.assertEqual(ce.execute_once(self.tmp), "none")
+
+    def test_capture_only_records_requirement_without_executor(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line(
+                    "记下来：后面要支持导出聊天记录", "capture-record-task"))
+
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {
+                "kind": "record_requirement",
+                "task": "支持导出聊天记录",
+            },
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+            poster=self.posts.append)
+
+        self.assertEqual(st, "recorded")
+        self.assertIn("capture-record-task", ce._load_handled(self.tmp))
+        self.assertTrue(any("已记录:支持导出聊天记录" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("待办 — 支持导出聊天记录", issues)
+
+    def test_capture_only_actionable_records_open_task_without_executor(self):
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+            poster=self.posts.append)
+
+        self.assertEqual(st, "captured")
+        self.assertIn("default-task", ce._load_handled(self.tmp))
+        self.assertTrue(any("已记入清单(执行器未开):做 ④ 英文化" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("待办 — 做 ④ 英文化", issues)
+        self.assertNotIn("进行中 — 做 ④ 英文化", issues)
+        self.assertNotIn("完成 — 做 ④ 英文化", issues)
+
+    def test_capture_only_high_risk_records_open_task_without_pending_greenlight(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line("发版吧", "capture-release-task"))
+
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {
+                "kind": "actionable",
+                "task": "发版 v0.9",
+            },
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+            poster=self.posts.append)
+
+        self.assertEqual(st, "captured")
+        self.assertIn("capture-release-task", ce._load_handled(self.tmp))
+        self.assertFalse(ce._pending_greenlight(self.tmp))
+        self.assertTrue(any("已记入清单(执行器未开):发版 v0.9" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("待办 — 发版 v0.9", issues)
+        self.assertNotIn("等待确认 — 发版 v0.9", issues)
+
+    def test_capture_only_greenlight_reply_clears_pending_greenlight_without_executor(self):
+        ce._set_pending_greenlight(self.tmp, "发版 v0.9")
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:01:00 PDT\n\n"
+                "%s\n" % self._signed_line("确认，执行发版", "capture-greenlight-reply"))
+
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: self.fail("pending greenlight should bypass judge"),
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+            poster=self.posts.append)
+
+        self.assertEqual(st, "captured")
+        self.assertIn("capture-greenlight-reply", ce._load_handled(self.tmp))
+        self.assertFalse(ce._pending_greenlight(self.tmp))
+        self.assertTrue(any("已记入清单(执行器未开):发版 v0.9" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("待办 — 发版 v0.9", issues)
+        self.assertNotIn("进行中 — 发版 v0.9", issues)
+
+    def test_capture_only_second_pass_is_handled_noop(self):
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+            poster=self.posts.append)
+        self.assertEqual(st, "captured")
+
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+            executor=lambda task, project, image_path=None: self.fail("handled task must not execute"),
+            poster=self.posts.append)
+
+        self.assertEqual(st, "none")
+        self.assertEqual(len([p for p in self.posts if "已记入清单(执行器未开)" in p]), 1)
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        marker = "chat-task:%s" % ce._task_id("做 ④ 英文化")
+        self.assertEqual(issues.count(marker), 1)
+
+    def test_capture_only_default_poster_does_not_reprocess_own_ack(self):
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+            executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"))
+        self.assertEqual(st, "captured")
+
+        board_path = os.path.join(self.tmp, ".collab", "collaboration.md")
+        with open(board_path) as f:
+            board_after_ack = f.read()
+        self.assertIn("**Claude:** 已记入清单(执行器未开):做 ④ 英文化", board_after_ack)
+
+        st = ce.execute_once(
+            self.tmp,
+            judge=lambda t, c, image_path=None: self.fail("lead ack must not be judged"),
+            executor=lambda task, project, image_path=None: self.fail("lead ack must not execute"))
+
+        self.assertEqual(st, "none")
+        with open(board_path) as f:
+            self.assertEqual(f.read(), board_after_ack)
+
+    def test_capture_only_actionable_retries_after_issues_lock_busy_without_done_or_post(self):
+        orig_acquire = ce.acquire_lock
+        orig_release = ce.release_lock
+        issues_acquires = []
+
+        def fake_acquire(lock_path, run_id, ttl, wait=0):
+            if os.path.basename(lock_path) == "ISSUES.lock":
+                issues_acquires.append(run_id)
+                return len(issues_acquires) > 1
+            return True
+
+        def fake_release(lock_path, run_id=None):
+            pass
+
+        try:
+            ce.acquire_lock = fake_acquire
+            ce.release_lock = fake_release
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+                poster=self.posts.append)
+            self.assertEqual(st, "retry")
+            self.assertNotIn("default-task", ce._load_handled(self.tmp))
+            self.assertEqual(self.posts, [])
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=lambda task, project, image_path=None: self.fail("capture-only must not execute"),
+                poster=self.posts.append)
+        finally:
+            ce.acquire_lock = orig_acquire
+            ce.release_lock = orig_release
+
+        self.assertEqual(st, "captured")
+        self.assertIn("default-task", ce._load_handled(self.tmp))
+        self.assertEqual(len([p for p in self.posts if "已记入清单(执行器未开)" in p]), 1)
 
     def test_runs_full_path_with_injected_judge_and_executor(self):
         os.environ["BRIDGE_CHAT_EXECUTE"] = "1"

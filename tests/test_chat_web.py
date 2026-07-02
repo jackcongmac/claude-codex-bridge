@@ -913,6 +913,16 @@ class ServerStartupTests(unittest.TestCase):
 
 
 class ServerLifecycleTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        collab = pathlib.Path(self.tmp) / ".collab"
+        collab.mkdir()
+        (collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        (collab / "collaboration.md").write_text("# Board\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_serve_chat_closes_server_after_shutdown(self):
         class Server:
             def __init__(self):
@@ -936,6 +946,79 @@ class ServerLifecycleTests(unittest.TestCase):
         self.assertTrue(server.served)
         self.assertTrue(server.closed)
         self.assertEqual(calls, [((["r"], "stop", "supervisor"), {"join_timeout": 5})])
+
+    def test_main_autostarts_and_stops_execute_supervisor_with_injected_spawn(self):
+        class Handle:
+            def __init__(self, cmd):
+                self.cmd = cmd
+                self.pid = None
+                self.terminated = False
+
+            def terminate(self):
+                self.terminated = True
+
+        class Server:
+            def __init__(self, project):
+                self.project = os.path.abspath(project)
+                self.server_address = ("127.0.0.1", 8765)
+                self.closed = False
+
+            def serve_forever(self):
+                pass
+
+            def server_close(self):
+                self.closed = True
+
+        server = Server(self.tmp)
+        spawned = []
+        stopped = []
+
+        def spawn(cmd):
+            handle = Handle(cmd)
+            spawned.append(cmd)
+            return handle
+
+        status = cw.main(
+            argv=["--self", "Jack", "--project", self.tmp, "--no-open"],
+            responder_spawn=spawn,
+            execute_spawn=spawn,
+            stop_execute=lambda handles: stopped.extend(handles),
+            make_server_default=lambda project, self_name: (server, 8765),
+            browser_open=lambda url: self.fail("test must not open a browser"))
+
+        expected = [[str(SCRIPTS / "bridge-chat-execute.sh"), "--project", os.path.abspath(self.tmp)]]
+        exec_cmds = [cmd for cmd in spawned if cmd[0].endswith("bridge-chat-execute.sh")]
+        self.assertEqual(status, 0)
+        self.assertEqual(exec_cmds, expected)
+        self.assertEqual([h.cmd for h in stopped], expected)
+        self.assertTrue(server.closed)
+
+    def test_main_no_responders_suppresses_execute_supervisor_autostart(self):
+        class Server:
+            def __init__(self, project):
+                self.project = os.path.abspath(project)
+                self.server_address = ("127.0.0.1", 8765)
+                self.closed = False
+
+            def serve_forever(self):
+                pass
+
+            def server_close(self):
+                self.closed = True
+
+        server = Server(self.tmp)
+        spawned = []
+
+        status = cw.main(
+            argv=["--self", "Jack", "--project", self.tmp, "--no-open", "--no-responders"],
+            responder_spawn=lambda cmd: spawned.append(cmd),
+            execute_spawn=lambda cmd: spawned.append(cmd),
+            make_server_default=lambda project, self_name: (server, 8765),
+            browser_open=lambda url: self.fail("test must not open a browser"))
+
+        self.assertEqual(status, 0)
+        self.assertEqual(spawned, [])
+        self.assertTrue(server.closed)
 
 
 if __name__ == "__main__":

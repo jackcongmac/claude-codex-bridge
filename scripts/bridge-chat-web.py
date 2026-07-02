@@ -746,6 +746,20 @@ def start_responders(project, scripts_dir=None, spawn=None):
     return [spawn(cmd) for cmd in responder_cmds(scripts_dir, project)]
 
 
+def execute_supervisor_cmd(scripts_dir, project):
+    sh = os.path.join(scripts_dir, "bridge-chat-execute.sh")
+    return [sh, "--project", project]
+
+
+def start_execute_supervisor(project, scripts_dir=None, spawn=None):
+    """Spawn the chat requirement capture/execution supervisor. The wrapper owns the
+    per-project single-instance mutex, so a duplicate process exits quietly."""
+    scripts_dir = scripts_dir or os.path.dirname(os.path.abspath(__file__))
+    spawn = spawn or (lambda cmd: subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True))
+    return [spawn(execute_supervisor_cmd(scripts_dir, project))]
+
+
 def _safe_responder_name(name):
     return re.sub(r'[^A-Za-z0-9_.-]', '_', name)
 
@@ -881,7 +895,8 @@ def _sigterm_as_keyboard_interrupt(signum, frame):
 
 
 def serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interval,
-               shutdown=shutdown_supervised_responders):
+               execute_supervisors=None, shutdown=shutdown_supervised_responders,
+               stop_execute=None):
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -892,12 +907,15 @@ def serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interv
             supervisor_stop if responders else None,
             supervisor,
             join_timeout=supervisor_interval + 2)
+        if execute_supervisors:
+            (stop_execute or stop_responders)(execute_supervisors)
         _clear_registered_server(getattr(httpd, "project", None))
         httpd.server_close()
     return 0
 
 
-def main():
+def main(argv=None, responder_spawn=None, execute_spawn=None, stop_execute=None,
+         make_server_default=None, make_server_explicit=None, browser_open=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--self", dest="self_name", default="Human")
     ap.add_argument("--project", default=None)
@@ -905,7 +923,10 @@ def main():
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--no-responders", action="store_true",
                     help="don't auto-start the Claude/Codex chat responders")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
+    make_server_default = make_server_default or make_server_with_default_fallback
+    make_server_explicit = make_server_explicit or make_server
+    browser_open = browser_open or webbrowser.open
     project = find_project_root(a.project)
     info = _chat_server.read_server_info(project)
     if _chat_server.is_running(
@@ -914,16 +935,22 @@ def main():
         print("群聊已在运行:%s" % url)
         return 0
     if a.port is None:
-        httpd, port = make_server_with_default_fallback(project, a.self_name)
+        httpd, port = make_server_default(project, a.self_name)
     else:
-        httpd, port = make_server(project, a.self_name, a.port)
+        httpd, port = make_server_explicit(project, a.self_name, a.port)
     url = "http://127.0.0.1:%d" % port
     _chat_server.write_server_info(
         httpd.project, port, os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))
     atexit.register(_clear_registered_server, httpd.project)
     signal.signal(signal.SIGTERM, _sigterm_as_keyboard_interrupt)
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
-    responders = [] if a.no_responders else start_responders(httpd.project)
+    responders = []
+    execute_supervisors = []
+    if not a.no_responders:
+        responders = start_responders(httpd.project, spawn=responder_spawn)
+        # --no-responders is the existing "no background automation" switch for
+        # read-only/test windows, so the always-on capture supervisor follows it.
+        execute_supervisors = start_execute_supervisor(httpd.project, spawn=execute_spawn)
     supervisor_stop = threading.Event()
     supervisor = None
     supervisor_interval = float(os.environ.get("BRIDGE_CHAT_RESPONDER_SUPERVISE_INTERVAL", "5"))
@@ -938,10 +965,12 @@ def main():
         supervisor.start()
     if not a.no_open:
         try:
-            webbrowser.open(url)
+            browser_open(url)
         except Exception:
             pass
-    return serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interval)
+    return serve_chat(
+        httpd, responders, supervisor_stop, supervisor, supervisor_interval,
+        execute_supervisors=execute_supervisors, stop_execute=stop_execute)
 
 
 if __name__ == "__main__":

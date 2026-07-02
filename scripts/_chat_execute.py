@@ -1,6 +1,7 @@
 """Chat-driven execution — P0a deterministic core. Turns a human chat message into a
 gated, reported execution decision. LLM judgment and the write-capable executor are
-injected boundaries (see execute_once). Safe: gated behind BRIDGE_CHAT_EXECUTE=1."""
+injected boundaries (see execute_once). Code execution is gated behind
+BRIDGE_CHAT_EXECUTE=1; signed requirement capture is always on."""
 import argparse
 import base64
 import binascii
@@ -113,6 +114,25 @@ def dispatch(project, decision, poster, enqueue):
         poster(decision.get("question") or "你是要现在就开始做吗?")
         return "asked"
     return "noop"
+
+
+def _capture_only(project, decision, poster):
+    action = decision.get("action")
+    if action in ("execute", "request_greenlight"):
+        task = decision.get("task", "")
+        _upsert_task_item(project, task, "open")
+        _clear_pending_greenlight(project, task)
+        poster("已记入清单(执行器未开):%s" % task)
+        return "captured"
+    if action == "record":
+        task = decision.get("task", "")
+        _upsert_task_item(project, task, "open")
+        poster("已记录:%s" % task)
+        return "recorded"
+    if action == "ask":
+        poster(decision.get("question") or "你是要现在就开始做吗?")
+        return "asked"
+    return "ignore"
 
 
 def _issues_path(project):
@@ -517,8 +537,7 @@ _default_executor = _chat_executor.run_task_executor
 
 
 def execute_once(project, judge=None, executor=None, poster=None):
-    if os.environ.get("BRIDGE_CHAT_EXECUTE") != "1":
-        return "disabled"
+    execute_enabled = os.environ.get("BRIDGE_CHAT_EXECUTE") == "1"
     executor = executor or _default_executor
     if judge is None:
         return "none"
@@ -542,6 +561,17 @@ def execute_once(project, judge=None, executor=None, poster=None):
 
     mid = _msg_key(selected)
     decision = decide(project, msgs[:selected_idx + 1], judge)
+
+    if not execute_enabled:
+        try:
+            st = _capture_only(project, decision, poster)
+        except RuntimeError as exc:
+            if str(exc) == "ISSUES.md lock busy":
+                _release_claim(project, mid)
+                return "retry"
+            raise
+        _set_state(project, mid, "done")
+        return st
 
     captured = {}
     def _enqueue(task):
