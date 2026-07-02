@@ -1,6 +1,6 @@
 {
   "name": "@jackcongus/claude-codex-bridge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "A bidirectional MCP bridge + per-project collaboration layer letting Claude Code and Codex find, reach, and stay in sync with each other.",
   "bin": {
     "claude-codex-bridge": "bin/claude-codex-bridge"
@@ -12,9 +12,16 @@
     "install.sh",
     "claude_chat_mcp.py",
     "scripts/",
+    "!scripts/__pycache__/",
     "skill/",
     "templates/",
     "docs/",
+    "!docs/superpowers/",
+    "!docs/github-promotion-plan.md",
+    "!docs/github-directory-targets.md",
+    "!docs/github-launch-commands.md",
+    "!docs/collaboration-platform-diagnosis-*.md",
+    "!docs/release-notes-v*.md",
     "bin/",
     "AGENTS.md",
     "CLAUDE.md"
