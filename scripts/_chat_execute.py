@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import (  # noqa: E402
     _pid_alive,
     acquire_lock,
+    atomic_write,
     atomic_write_json,
     collab_paths,
     find_project_root,
@@ -36,10 +37,18 @@ _HIGH_RISK = re.compile(
     r"git\s+clean\b|clean\s+-fdx\b|(?<![-\w])drop(?![-\w])|\bwipe\b|\berase\b|"
     r"抹除|清空|清除|\bdeploy\b|部署|\bprod(?:uction)?\b|线上|生产|"
     r"\bsecret\b|token\s+rotation|轮换密钥|\brotate\b)", re.I)
+_GREENLIGHT = re.compile(
+    r"(确认|同意|批准|可以|开始|执行|继续|\bgo\b|\bgreenlight\b|\byes\b|\bok(?:ay)?\b|"
+    r"\bproceed\b)",
+    re.I)
 
 
 def is_high_risk(task_text):
     return bool(_HIGH_RISK.search(task_text or ""))
+
+
+def _is_greenlight_reply(text):
+    return bool(_GREENLIGHT.search(text or ""))
 
 
 def _human_sig_ok(project, msg):
@@ -64,6 +73,9 @@ def decide(project, msgs, judge):
     if not _human_sig_ok(project, latest):
         return {"action": "ignore", "reason": "unsigned-human"}
     image_path = _image_path_for(project, latest)
+    pending = _pending_greenlight(project)
+    if pending and _is_greenlight_reply(latest.get("text", "")):
+        return {"action": "execute", "task": pending["task"], "image_path": image_path}
     verdict = judge(latest.get("text", ""), msgs[:-1], image_path) or {}
     kind = verdict.get("kind")
     if kind == "actionable":
@@ -71,6 +83,9 @@ def decide(project, msgs, judge):
         if is_high_risk(task) or is_high_risk(latest.get("text", "")):
             return {"action": "request_greenlight", "task": task, "image_path": image_path}
         return {"action": "execute", "task": task, "image_path": image_path}
+    if kind == "record_requirement":
+        task = (verdict.get("task") or latest.get("text", "")).strip()
+        return {"action": "record", "task": task}
     if kind == "ambiguous":
         return {"action": "ask",
                 "question": verdict.get("question") or "你是要现在就开始做吗?"}
@@ -84,8 +99,16 @@ def dispatch(project, decision, poster, enqueue):
         enqueue(decision["task"])
         return "acked-enqueued"
     if action == "request_greenlight":
-        poster("这个需要你点头才能做(高风险):%s" % decision.get("task", ""))
+        task = decision.get("task", "")
+        _upsert_task_item(project, task, "awaiting_greenlight")
+        _set_pending_greenlight(project, task)
+        poster("这个需要你点头才能做(高风险):%s" % task)
         return "requested-greenlight"
+    if action == "record":
+        task = decision.get("task", "")
+        _upsert_task_item(project, task, "open")
+        poster("已记录:%s" % task)
+        return "recorded"
     if action == "ask":
         poster(decision.get("question") or "你是要现在就开始做吗?")
         return "asked"
@@ -94,6 +117,10 @@ def dispatch(project, decision, poster, enqueue):
 
 def _issues_path(project):
     return os.path.join(collab_paths(find_project_root(project))["dir"], "ISSUES.md")
+
+
+def _issues_lock_path(project):
+    return os.path.join(collab_paths(find_project_root(project))["dir"], "ISSUES.lock")
 
 
 def _execute_state_path(project):
@@ -109,6 +136,137 @@ def _execute_lock_path(project):
 _STATE_LIMIT = 500
 _VALID_MSG_STATES = {"claimed", "running", "done"}
 _CLAIM_STALE_SECONDS = 2000
+_GREENLIGHT_STALE_SECONDS = 24 * 60 * 60
+_TASK_SECTION = "## Chat-Driven Tasks"
+
+
+def _read_issues(project):
+    try:
+        with open(_issues_path(project)) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def _write_issues(project, body):
+    atomic_write(_issues_path(project), body.rstrip() + "\n")
+
+
+def _update_issues(project, editor):
+    run_id = "issues-%s-%s" % (os.getpid(), uuid.uuid4().hex)
+    lock_path = _issues_lock_path(project)
+    if not acquire_lock(lock_path, run_id, ttl=30, wait=3):
+        raise RuntimeError("ISSUES.md lock busy")
+    try:
+        body = _read_issues(project)
+        updated = editor(body)
+        if updated is not None:
+            _write_issues(project, updated)
+        return updated
+    finally:
+        release_lock(lock_path, run_id)
+
+
+def _task_id(task):
+    normalized = " ".join((task or "").split())
+    return hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:12]
+
+
+def _task_line(task, status, result=None):
+    result = result or {}
+    done = status == "done"
+    label = {
+        "open": "待办",
+        "awaiting_greenlight": "等待确认",
+        "running": "进行中",
+        "done": "完成",
+        "failed": "失败",
+    }.get(status, status)
+    details = []
+    summary = result.get("summary") or ""
+    commit = result.get("commit") or ""
+    if summary:
+        details.append(summary)
+    if commit:
+        details.append("commit " + commit)
+    suffix = (" · " + " · ".join(details)) if details else ""
+    return "- [%s] <!-- chat-task:%s --> %s — %s%s" % (
+        "x" if done else " ", _task_id(task), label, task, suffix)
+
+
+def _task_has_status(project, task, status):
+    # Follow-up: ISSUES.md task status is unauthenticated; approvals stay gated by signed chat state.
+    label = {
+        "open": "待办",
+        "awaiting_greenlight": "等待确认",
+        "running": "进行中",
+        "done": "完成",
+        "failed": "失败",
+    }.get(status, status)
+    marker = "<!-- chat-task:%s -->" % _task_id(task)
+    pattern = r"(?m)^- \[[ x]\] %s %s — " % (re.escape(marker), re.escape(label))
+    return bool(re.search(pattern, _read_issues(project)))
+
+
+def _upsert_task_item_in_body(body, task, status, result=None):
+    line = _task_line(task, status, result=result)
+    marker = "<!-- chat-task:%s -->" % _task_id(task)
+    marker_re = re.compile(r"(?m)^- \[[ x]\] %s .*$" % re.escape(marker))
+
+    if marker_re.search(body):
+        return marker_re.sub(lambda _m: line, body)
+
+    if _TASK_SECTION not in body:
+        prefix = body.rstrip()
+        return ("%s\n\n%s\n\n%s\n" % (prefix, _TASK_SECTION, line)) if prefix else (
+            "%s\n\n%s\n" % (_TASK_SECTION, line))
+
+    section = re.search(r"(?m)^%s\s*$" % re.escape(_TASK_SECTION), body)
+    if not section:
+        return body.rstrip() + "\n\n%s\n\n%s\n" % (_TASK_SECTION, line)
+    next_section = re.search(r"(?m)^## ", body[section.end():])
+    insert_at = section.end() + (
+        next_section.start() if next_section else len(body[section.end():]))
+    prefix = body[:insert_at].rstrip()
+    suffix = body[insert_at:].lstrip("\n")
+    updated = prefix + "\n" + line + "\n"
+    if suffix:
+        updated += "\n" + suffix
+    return updated
+
+
+def _upsert_task_item(project, task, status, result=None):
+    _update_issues(project, lambda body: _upsert_task_item_in_body(
+        body, task, status, result=result))
+
+
+def _normalize_pending_greenlight(data):
+    if not isinstance(data, dict):
+        return None
+    pending = data.get("pending_greenlight")
+    if not isinstance(pending, dict):
+        return None
+    task = pending.get("task")
+    if not isinstance(task, str) or not task.strip():
+        return None
+    normalized = {
+        "task": task,
+        "id": pending.get("id") if isinstance(pending.get("id"), str) else _task_id(task),
+        "at": pending.get("at") if isinstance(pending.get("at"), str) else "",
+    }
+    try:
+        normalized["epoch"] = float(pending.get("epoch"))
+    except (TypeError, ValueError):
+        pass
+    return normalized
+
+
+def _state_with_pending(data, messages):
+    state = {"version": 2, "messages": messages}
+    pending = _normalize_pending_greenlight(data)
+    if pending:
+        state["pending_greenlight"] = pending
+    return state
 
 
 def _normalize_state(data):
@@ -117,7 +275,7 @@ def _normalize_state(data):
         for mid in data.get("handled", []):
             if isinstance(mid, str) and mid not in messages:
                 messages[mid] = {"state": "done", "at": ""}
-        return {"version": 2, "messages": messages}
+        return _state_with_pending(data, messages)
 
     if isinstance(data, dict) and isinstance(data.get("messages"), dict):
         for mid, entry in data.get("messages", {}).items():
@@ -136,8 +294,10 @@ def _normalize_state(data):
                         normalized["pid"] = entry["pid"]
                     if "epoch" in entry:
                         normalized["epoch"] = entry["epoch"]
+                    if isinstance(entry.get("task"), str):
+                        normalized["task"] = entry["task"]
                 messages[mid] = normalized
-        return {"version": 2, "messages": messages}
+        return _state_with_pending(data, messages)
 
     return {"version": 2, "messages": {}}
 
@@ -162,11 +322,60 @@ def _write_state(project, state):
     atomic_write_json(_execute_state_path(project), _prune_state(state))
 
 
-def _set_state(project, mid, state):
+def _pending_greenlight(project):
+    pending = _load_state(project).get("pending_greenlight")
+    if not isinstance(pending, dict):
+        return None
+    epoch = pending.get("epoch")
+    try:
+        if epoch is not None and time.time() - float(epoch) > _GREENLIGHT_STALE_SECONDS:
+            return None
+    except (TypeError, ValueError):
+        return None
+    task = pending.get("task")
+    if not isinstance(task, str) or not task.strip():
+        return None
+    return pending
+
+
+def _set_pending_greenlight(project, task):
+    data = _load_state(project)
+    data["pending_greenlight"] = {
+        "task": task,
+        "id": _task_id(task),
+        "at": now_str(),
+        "epoch": time.time(),
+    }
+    _write_state(project, data)
+
+
+def _clear_pending_greenlight(project, task=None):
+    data = _load_state(project)
+    pending = data.get("pending_greenlight")
+    if not isinstance(pending, dict):
+        return
+    if task is not None and pending.get("id") != _task_id(task):
+        return
+    data.pop("pending_greenlight", None)
+    _write_state(project, data)
+
+
+def _release_claim(project, mid):
+    data = _load_state(project)
+    messages = data.setdefault("messages", {})
+    entry = messages.get(mid) or {}
+    if entry.get("state") == "claimed":
+        messages.pop(mid, None)
+        _write_state(project, data)
+
+
+def _set_state(project, mid, state, task=None):
     data = _load_state(project)
     entry = {"state": state, "at": now_str()}
     if state == "claimed":
         entry.update({"pid": os.getpid(), "epoch": time.time()})
+    if task:
+        entry["task"] = task
     data.setdefault("messages", {})[mid] = entry
     _write_state(project, data)
 
@@ -245,6 +454,8 @@ def _claim_next_message(project, msgs):
                 warnings.append(
                     "⚠️ 上一个任务执行中断,需要你确认是否已完成/是否重跑:%s"
                     % msg.get("text", ""))
+                _upsert_task_item(project, entry.get("task") or msg.get("text", ""),
+                                  "failed", {"summary": "执行中断,需要确认是否已完成/是否重跑"})
                 messages[mid] = {"state": "done", "at": now_str()}
                 changed = True
         if changed:
@@ -264,20 +475,19 @@ def report(project, task, result, poster):
         line = "❌ 失败:%s — %s" % (task, summary)
     poster(line)
 
-    path = _issues_path(project)
-    try:
-        with open(path) as f:
-            body = f.read()
-    except OSError:
-        body = ""
-    if "## 执行记录" not in body:
-        body = body.rstrip() + "\n\n## 执行记录\n" if body else "## 执行记录\n"
     row = "- [%s] %s — %s%s%s\n" % (
         now_str()[:16], task, ("成功" if ok else "失败"),
         (" · " + summary) if summary else "",
         (" · commit " + commit) if commit else "")
-    with open(path, "w") as f:
-        f.write(body.rstrip() + "\n" + row)
+
+    def _edit(body):
+        body = _upsert_task_item_in_body(
+            body, task, "done" if ok else "failed", result=result)
+        if "## 执行记录" not in body:
+            body = body.rstrip() + "\n\n## 执行记录\n" if body else "## 执行记录\n"
+        return body.rstrip() + "\n" + row
+
+    _update_issues(project, _edit)
 
 
 def _parse_chat_fn():
@@ -332,17 +542,24 @@ def execute_once(project, judge=None, executor=None, poster=None):
 
     mid = _msg_key(selected)
     decision = decide(project, msgs[:selected_idx + 1], judge)
-    if decision.get("action") != "execute":
-        _set_state(project, mid, "done")
 
     captured = {}
     def _enqueue(task):
         captured["task"] = task
-    st = dispatch(project, decision, poster, _enqueue)
+    try:
+        st = dispatch(project, decision, poster, _enqueue)
+    except RuntimeError as exc:
+        if str(exc) == "ISSUES.md lock busy":
+            _release_claim(project, mid)
+            return "retry"
+        raise
     if st != "acked-enqueued":
+        _set_state(project, mid, "done")
         return {"asked": "asked", "requested-greenlight": "requested-greenlight",
-                "noop": "ignore"}.get(st, "none")
-    _set_state(project, mid, "running")
+                "recorded": "recorded", "noop": "ignore"}.get(st, "none")
+    _upsert_task_item(project, captured["task"], "running")
+    _set_state(project, mid, "running", task=captured["task"])
+    _clear_pending_greenlight(project, captured["task"])
     result = executor(captured["task"], project, decision.get("image_path"))
     report(project, captured["task"], result, poster)
     _set_state(project, mid, "done")

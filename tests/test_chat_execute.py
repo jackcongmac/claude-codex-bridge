@@ -139,6 +139,17 @@ class DecideTests(unittest.TestCase):
         self.assertEqual(d["action"], "execute")
         self.assertEqual(d["task"], "做 ④ 英文化")
 
+    def test_record_requirement_records_without_execution(self):
+        d = ce.decide(
+            self.tmp,
+            self._msgs(("Jack", "记下来：后面要支持导出聊天记录")),
+            judge=lambda t, c, image_path=None: {
+                "kind": "record_requirement",
+                "task": "支持导出聊天记录",
+            })
+        self.assertEqual(d["action"], "record")
+        self.assertEqual(d["task"], "支持导出聊天记录")
+
     def test_decide_forwards_resolved_image_path_to_judge_and_decision(self):
         uploads = os.path.join(self.tmp, ".collab", "chat_uploads")
         os.makedirs(uploads)
@@ -210,6 +221,59 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(st, "requested-greenlight")
         self.assertEqual([e[0] for e in self.events], ["post"])
         self.assertIn("需要你点头", self.events[0][1])
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("## Chat-Driven Tasks", issues)
+        self.assertIn("- [ ]", issues)
+        self.assertIn("等待确认 — 发版", issues)
+
+    def test_record_posts_issue_item_and_does_not_enqueue(self):
+        st = ce.dispatch(self.tmp, {"action": "record", "task": "支持导出聊天记录"},
+                         self._poster, self._enqueue)
+        self.assertEqual(st, "recorded")
+        self.assertEqual([e[0] for e in self.events], ["post"])
+        self.assertIn("已记录", self.events[0][1])
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("## Chat-Driven Tasks", issues)
+        self.assertIn("- [ ]", issues)
+        self.assertIn("待办 — 支持导出聊天记录", issues)
+
+    def test_record_issue_write_uses_issues_lock(self):
+        calls = []
+        orig_acquire = ce.acquire_lock
+        orig_release = ce.release_lock
+
+        def fake_acquire(lock_path, run_id, ttl, wait=0):
+            calls.append(("acquire", os.path.basename(lock_path), bool(run_id), ttl, wait))
+            return True
+
+        def fake_release(lock_path, run_id=None):
+            calls.append(("release", os.path.basename(lock_path), bool(run_id)))
+
+        try:
+            ce.acquire_lock = fake_acquire
+            ce.release_lock = fake_release
+            ce.dispatch(self.tmp, {"action": "record", "task": "支持导出聊天记录"},
+                        self._poster, self._enqueue)
+        finally:
+            ce.acquire_lock = orig_acquire
+            ce.release_lock = orig_release
+
+        self.assertEqual(calls[0], ("acquire", "ISSUES.lock", True, 30, 3))
+        self.assertEqual(calls[-1], ("release", "ISSUES.lock", True))
+
+    def test_backslash_task_text_is_upserted_literally_and_deduped(self):
+        task = "修复 C:\\1 路径和结尾 \\"
+
+        ce.dispatch(self.tmp, {"action": "record", "task": task}, self._poster, self._enqueue)
+        ce.dispatch(self.tmp, {"action": "record", "task": task}, self._poster, self._enqueue)
+
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        marker = "chat-task:%s" % ce._task_id(task)
+        self.assertEqual(issues.count(marker), 1)
+        self.assertIn("待办 — " + task, issues)
 
     def test_ask_posts_question_only(self):
         st = ce.dispatch(self.tmp, {"action": "ask", "question": "现在做④吗?"},
@@ -238,6 +302,10 @@ class ReportTests(unittest.TestCase):
                   self.posts.append)
         self.assertTrue(any("✅" in p and "abc1234" in p for p in self.posts))
         log = self._issues()
+        self.assertIn("## Chat-Driven Tasks", log)
+        self.assertIn("<!-- chat-task:", log)
+        self.assertIn("- [x]", log)
+        self.assertIn("完成 — 做 ④ 英文化", log)
         self.assertIn("## 执行记录", log)
         self.assertIn("做 ④ 英文化", log)
         self.assertIn("abc1234", log)
@@ -245,7 +313,97 @@ class ReportTests(unittest.TestCase):
     def test_failure_posts_and_logs_reason(self):
         ce.report(self.tmp, "做 X", {"ok": False, "summary": "测试没过"}, self.posts.append)
         self.assertTrue(any("❌" in p and "测试没过" in p for p in self.posts))
-        self.assertIn("测试没过", self._issues())
+        log = self._issues()
+        self.assertIn("- [ ]", log)
+        self.assertIn("失败 — 做 X", log)
+        self.assertIn("测试没过", log)
+
+    def test_report_updates_task_and_execution_record_under_one_issues_lock(self):
+        calls = []
+        orig_acquire = ce.acquire_lock
+        orig_release = ce.release_lock
+
+        def fake_acquire(lock_path, run_id, ttl, wait=0):
+            if os.path.basename(lock_path) == "ISSUES.lock":
+                calls.append(("acquire", run_id))
+            return True
+
+        def fake_release(lock_path, run_id=None):
+            if os.path.basename(lock_path) == "ISSUES.lock":
+                calls.append(("release", run_id))
+
+        try:
+            ce.acquire_lock = fake_acquire
+            ce.release_lock = fake_release
+            ce.report(self.tmp, "做 ④ 英文化",
+                      {"ok": True, "summary": "done", "commit": "abc1234"},
+                      self.posts.append)
+        finally:
+            ce.acquire_lock = orig_acquire
+            ce.release_lock = orig_release
+
+        self.assertEqual([kind for kind, _run_id in calls], ["acquire", "release"])
+        log = self._issues()
+        self.assertIn("完成 — 做 ④ 英文化", log)
+        self.assertIn("## 执行记录", log)
+        self.assertIn("abc1234", log)
+
+
+class TaskIssueTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        os.mkdir(os.path.join(self.tmp, ".collab"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _issues(self):
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            return f.read()
+
+    def test_duplicate_requirement_upsert_keeps_single_marker_line(self):
+        task = "支持导出聊天记录"
+
+        ce._upsert_task_item(self.tmp, task, "open")
+        ce._upsert_task_item(self.tmp, task, "open")
+
+        marker = "chat-task:%s" % ce._task_id(task)
+        issues = self._issues()
+        self.assertEqual(issues.count(marker), 1)
+        self.assertEqual(len([line for line in issues.splitlines() if marker in line]), 1)
+
+    def test_task_status_transition_replaces_single_marker_line(self):
+        task = "支持导出聊天记录"
+
+        ce._upsert_task_item(self.tmp, task, "open")
+        ce._upsert_task_item(self.tmp, task, "running")
+        ce._upsert_task_item(self.tmp, task, "done", {"summary": "done", "commit": "abc1234"})
+
+        marker = "chat-task:%s" % ce._task_id(task)
+        lines = [line for line in self._issues().splitlines() if marker in line]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("- [x]", lines[0])
+        self.assertIn("完成 — " + task, lines[0])
+        self.assertIn("commit abc1234", lines[0])
+
+    def test_chat_driven_section_insert_preserves_following_section(self):
+        path = os.path.join(self.tmp, ".collab", "ISSUES.md")
+        with open(path, "w") as f:
+            f.write(
+                "# Issues\n\n"
+                "## Chat-Driven Tasks\n\n"
+                "Existing note\n\n"
+                "## Manual Tasks\n\n"
+                "- keep this line\n")
+
+        ce._upsert_task_item(self.tmp, "支持导出聊天记录", "open")
+
+        issues = self._issues()
+        self.assertLess(issues.index("待办 — 支持导出聊天记录"),
+                        issues.index("## Manual Tasks"))
+        self.assertIn("Existing note", issues)
+        self.assertIn("## Manual Tasks\n\n- keep this line", issues)
+
 
 class ExecuteOnceTests(unittest.TestCase):
     def setUp(self):
@@ -297,7 +455,301 @@ class ExecuteOnceTests(unittest.TestCase):
         self.assertIn("开始执行", joined)     # ack
         self.assertIn("✅", joined)            # report
         with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
-            self.assertIn("abc1234", f.read())
+            issues = f.read()
+        self.assertIn("## Chat-Driven Tasks", issues)
+        self.assertIn("- [x]", issues)
+        self.assertIn("完成 — 做 ④ 英文化", issues)
+        self.assertIn("abc1234", issues)
+
+    def test_execute_once_creates_running_issue_before_executor(self):
+        seen = {}
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md"), "w") as f:
+            f.write("")
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            def executor(task, project, image_path=None):
+                with open(os.path.join(project, ".collab", "ISSUES.md")) as f:
+                    seen["during"] = f.read()
+                return {"ok": True, "summary": "done", "commit": "abc1234"}
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {"kind": "actionable", "task": "做 ④ 英文化"},
+                executor=executor,
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertIn("## Chat-Driven Tasks", seen["during"])
+        self.assertIn("- [ ]", seen["during"])
+        self.assertIn("进行中 — 做 ④ 英文化", seen["during"])
+
+    def test_execute_once_records_requirement_without_executor(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line(
+                    "记下来：后面要支持导出聊天记录", "record-only-task"))
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "record_requirement",
+                    "task": "支持导出聊天记录",
+                },
+                executor=lambda task, project, image_path=None: self.fail("record-only task must not execute"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "recorded")
+        self.assertIn("record-only-task", ce._load_handled(self.tmp))
+        self.assertTrue(any("已记录" in p for p in self.posts))
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("待办 — 支持导出聊天记录", issues)
+
+    def test_record_requirement_retries_after_issues_lock_busy_without_done_or_post(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line(
+                    "记下来：后面要支持导出聊天记录", "record-lock-busy"))
+
+        orig_acquire = ce.acquire_lock
+        orig_release = ce.release_lock
+        issues_acquires = []
+
+        def fake_acquire(lock_path, run_id, ttl, wait=0):
+            if os.path.basename(lock_path) == "ISSUES.lock":
+                issues_acquires.append(run_id)
+                return len(issues_acquires) > 1
+            return True
+
+        def fake_release(lock_path, run_id=None):
+            pass
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            ce.acquire_lock = fake_acquire
+            ce.release_lock = fake_release
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "record_requirement",
+                    "task": "支持导出聊天记录",
+                },
+                executor=lambda task, project, image_path=None: self.fail("record-only task must not execute"),
+                poster=self.posts.append)
+            self.assertEqual(st, "retry")
+            self.assertNotIn("record-lock-busy", ce._load_handled(self.tmp))
+            self.assertEqual(self.posts, [])
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "record_requirement",
+                    "task": "支持导出聊天记录",
+                },
+                executor=lambda task, project, image_path=None: self.fail("record-only task must not execute"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+            ce.acquire_lock = orig_acquire
+            ce.release_lock = orig_release
+
+        self.assertEqual(st, "recorded")
+        self.assertIn("record-lock-busy", ce._load_handled(self.tmp))
+        self.assertEqual(len([p for p in self.posts if "已记录" in p]), 1)
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        marker = "chat-task:%s" % ce._task_id("支持导出聊天记录")
+        self.assertEqual(issues.count(marker), 1)
+        self.assertIn("待办 — 支持导出聊天记录", issues)
+
+    def test_greenlight_reply_executes_pending_high_risk_issue(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line("发版吧", "release-request"))
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: self.fail("high-risk task must wait for greenlight"),
+                poster=self.posts.append)
+            self.assertEqual(st, "requested-greenlight")
+            with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+                self.assertIn("等待确认 — 发版 v0.9", f.read())
+
+            with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+                f.write(
+                    "# Board\n\n## Chat\n\n"
+                    "### 2026-06-29 10:01:00 PDT\n\n"
+                    "%s\n"
+                    "### 2026-06-29 10:00:00 PDT\n\n"
+                    "%s\n" % (
+                        self._signed_line("确认，执行发版", "release-greenlight"),
+                        self._signed_line("发版吧", "release-request"),
+                    ))
+
+            calls = []
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: (
+                    calls.append(task) or {"ok": True, "summary": "released", "commit": "def5678"}
+                ),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(calls, ["发版 v0.9"])
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("完成 — 发版 v0.9", issues)
+        self.assertIn("def5678", issues)
+
+    def test_greenlight_confirmation_executes_persisted_pending_task_when_judge_task_differs(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line("发版吧", "release-request-diff"))
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: self.fail("high-risk task must wait for greenlight"),
+                poster=self.posts.append)
+            self.assertEqual(st, "requested-greenlight")
+
+            with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+                f.write(
+                    "# Board\n\n## Chat\n\n"
+                    "### 2026-06-29 10:01:00 PDT\n\n"
+                    "%s\n"
+                    "### 2026-06-29 10:00:00 PDT\n\n"
+                    "%s\n" % (
+                        self._signed_line("确认", "release-greenlight-diff"),
+                        self._signed_line("发版吧", "release-request-diff"),
+                    ))
+
+            calls = []
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版",
+                },
+                executor=lambda task, project, image_path=None: (
+                    calls.append(task) or {"ok": True, "summary": "released", "commit": "def5678"}
+                ),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "done")
+        self.assertEqual(calls, ["发版 v0.9"])
+        with open(os.path.join(self.tmp, ".collab", "chat_execute_state.json")) as f:
+            state = json.load(f)
+        self.assertNotIn("pending_greenlight", state)
+
+    def test_casual_greenlight_without_pending_task_does_not_execute_from_issues_marker(self):
+        ce._upsert_task_item(self.tmp, "发版 v0.9", "awaiting_greenlight")
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line("可以", "casual-ok-no-pending"))
+
+        calls = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: (
+                    calls.append(task) or {"ok": True, "summary": "wrong"}
+                ),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "requested-greenlight")
+        self.assertEqual(calls, [])
+        self.assertIn("casual-ok-no-pending", ce._load_handled(self.tmp))
+
+    def test_repeated_high_risk_request_does_not_execute_pending_issue(self):
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write(
+                "# Board\n\n## Chat\n\n"
+                "### 2026-06-29 10:00:00 PDT\n\n"
+                "%s\n" % self._signed_line("发版吧", "release-request"))
+
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: self.fail("high-risk task must wait for greenlight"),
+                poster=self.posts.append)
+            self.assertEqual(st, "requested-greenlight")
+
+            with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+                f.write(
+                    "# Board\n\n## Chat\n\n"
+                    "### 2026-06-29 10:01:00 PDT\n\n"
+                    "%s\n"
+                    "### 2026-06-29 10:00:00 PDT\n\n"
+                    "%s\n" % (
+                        self._signed_line("发版吧", "release-repeat"),
+                        self._signed_line("发版吧", "release-request"),
+                    ))
+
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: {
+                    "kind": "actionable",
+                    "task": "发版 v0.9",
+                },
+                executor=lambda task, project, image_path=None: self.fail("repeat is not greenlight"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+
+        self.assertEqual(st, "requested-greenlight")
+        with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+            issues = f.read()
+        self.assertIn("等待确认 — 发版 v0.9", issues)
+        self.assertNotIn("完成 — 发版 v0.9", issues)
 
     def test_execute_once_passes_resolved_image_path_to_executor(self):
         uploads = os.path.join(self.tmp, ".collab", "chat_uploads")
@@ -519,6 +971,10 @@ class ExecuteOnceTests(unittest.TestCase):
             warnings = [p for p in self.posts if "上一个任务执行中断" in p]
             self.assertEqual(len(warnings), 1)
             self.assertIn("ship the small safe fix", warnings[0])
+            with open(os.path.join(self.tmp, ".collab", "ISSUES.md")) as f:
+                issues = f.read()
+            self.assertIn("失败 — safe fix", issues)
+            self.assertIn("执行中断", issues)
 
             st = ce.execute_once(
                 self.tmp,

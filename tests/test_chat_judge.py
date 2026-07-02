@@ -24,6 +24,17 @@ class ChatJudgeTests(unittest.TestCase):
 
         self.assertEqual(out, {"kind": "actionable", "task": "修复登录错误"})
 
+    def test_record_requirement_extracts_task_without_execution_intent(self):
+        out = judge.classify(
+            "记下来：后面要支持导出聊天记录",
+            [],
+            lambda prompt, image_path=None: (
+                '{"kind":"record_requirement","task":"支持导出聊天记录"}'
+            ),
+        )
+
+        self.assertEqual(out, {"kind": "record_requirement", "task": "支持导出聊天记录"})
+
     def test_wrapped_json_actionable_is_still_parsed(self):
         raw = 'Here is the result:\n```json\n{"kind":"actionable","task":"跑测试"}\n```'
 

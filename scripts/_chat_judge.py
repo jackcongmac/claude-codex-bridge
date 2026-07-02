@@ -5,7 +5,7 @@ import subprocess
 
 
 _DEFAULT_QUESTION = "你是要现在就开始做吗?"
-_VALID_KINDS = {"actionable", "opinion", "ambiguous"}
+_VALID_KINDS = {"actionable", "record_requirement", "opinion", "ambiguous"}
 
 
 def is_actionable(verdict):
@@ -33,13 +33,16 @@ def _build_prompt(text, context):
     return """You classify ONE latest human message in a software-development group chat.
 
 Decide whether the human is directing the team to DO, implement, fix, run, change,
-or otherwise act now ("actionable"), merely discussing or giving an opinion
-("opinion"), or unclear enough that the team should ask a follow-up ("ambiguous").
+or otherwise act now ("actionable"), asking the team to remember/track a future
+requirement without doing it now ("record_requirement"), merely discussing or
+giving an opinion ("opinion"), or unclear enough that the team should ask a
+follow-up ("ambiguous").
 
-If actionable, extract a concrete task the team can execute. If ambiguous, provide
+If actionable, extract a concrete task the team can execute. If record_requirement,
+extract the durable task/requirement to remember but not run. If ambiguous, provide
 a short clarifying question. Reply with ONLY one JSON object and no prose, no
 Markdown, no code fences:
-{"kind":"actionable|opinion|ambiguous","task":"...","question":"..."}
+{"kind":"actionable|record_requirement|opinion|ambiguous","task":"...","question":"..."}
 
 Prior context, oldest to newest, up to the last 8 messages:
 %s
@@ -69,7 +72,8 @@ def _parse_json_object(raw):
 def classify(text, context, call_llm, image_path=None):
     """text: the human's latest message. context: list of prior msg dicts ({speaker,text}).
     call_llm(prompt:str,image_path=None)->str: injected boundary that returns the model's raw text.
-    Returns {"kind": "actionable"|"opinion"|"ambiguous", "task": str?, "question": str?}.
+    Returns {"kind": "actionable"|"record_requirement"|"opinion"|"ambiguous",
+    "task": str?, "question": str?}.
     Robust: if call_llm output can't be parsed into a valid kind, return
     {"kind":"ambiguous","question":"你是要现在就开始做吗?"} (fail safe — never guess 'actionable').
     """
@@ -91,6 +95,9 @@ def classify(text, context, call_llm, image_path=None):
     if kind == "actionable":
         task = (parsed.get("task") or text or "").strip()
         return {"kind": "actionable", "task": task}
+    if kind == "record_requirement":
+        task = (parsed.get("task") or text or "").strip()
+        return {"kind": "record_requirement", "task": task}
     if kind == "ambiguous":
         question = (parsed.get("question") or _DEFAULT_QUESTION).strip()
         return {"kind": "ambiguous", "question": question or _DEFAULT_QUESTION}
