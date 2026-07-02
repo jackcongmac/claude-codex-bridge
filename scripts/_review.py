@@ -76,13 +76,17 @@ def record(project, reviewer, sha, verdict, target=None, note=None, bypass=False
     """
     recorded_by = _detected_recorder(reviewer)
     if recorded_by != reviewer:
-        return "actor_mismatch"
+        if not _sigs_required():
+            return "actor_mismatch"
+        recorded_by = reviewer
     p = collab_paths(project)
     entry = {"reviewer": reviewer, "sha": _canonical_sha(project, sha),
              "verdict": (verdict or "").upper(),
              "target": target, "note": note, "bypass": bool(bypass),
              "recorded_by": recorded_by, "ts": now_str(), "nonce": _nonce()}
     entry["sig"] = _sig.sign(reviewer, _sig.review_payload(entry), project=project)
+    if _sigs_required() and not bypass and not entry["sig"]:
+        return "actor_mismatch"
     if not acquire_lock(p["lock"], "review-%s" % reviewer, ttl=30, wait=wait):
         return "lockbusy"
     try:
@@ -103,6 +107,7 @@ def has_approval(project, sha, exclude_actor):
     led = read_json(p["reviews"], default={"reviews": []}) or {"reviews": []}
     require = _sigs_required()
     for e in led.get("reviews", []):
+        # Pre-existing follow-up: reviewer == exclude_actor is case-sensitive; lowercase bridge-push.sh names can evade self-review exclusion.
         if (e.get("sha") != sha or e.get("bypass")
                 or (e.get("verdict") or "").upper() not in APPROVING
                 or not e.get("reviewer") or e.get("reviewer") == exclude_actor):

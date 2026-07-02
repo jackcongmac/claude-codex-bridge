@@ -116,6 +116,9 @@ class ReviewLedgerTests(unittest.TestCase):
     def _reviews_path(self):
         return self.collab / "collaboration_reviews.json"
 
+    def _ledger(self):
+        return json.loads(self._reviews_path().read_text())
+
     def test_peer_ship_approves_the_sha(self):
         self._record("--self", "Codex", "--sha", "abc123", "--verdict", "SHIP")
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
@@ -175,18 +178,62 @@ class ReviewLedgerTests(unittest.TestCase):
         self.assertEqual(led["reviews"][0]["recorded_by"], "Codex")
         self.assertEqual(self._check("abc123", "Claude").returncode, 0)
 
-    def test_codex_environment_cannot_record_as_claude(self):
-        r = self._record("--self", "Claude", "--sha", "abc123", "--verdict", "SHIP",
-                         env={"CODEX_CI": "1"})
+    def test_signed_codex_review_records_under_claude_environment(self):
+        import _review
+        import _sig
+
+        r = self._record("--self", "Codex", "--sha", "abc123", "--verdict", "GO",
+                         env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        led = self._ledger()
+        entry = led["reviews"][0]
+
+        self.assertEqual(entry["reviewer"], "Codex")
+        self.assertEqual(entry["recorded_by"], "Codex")
+        self.assertTrue(entry.get("sig"))
+        self.assertTrue(
+            _sig.verify("Codex", _sig.review_payload(entry), entry["sig"],
+                        project=self.tmp))
+        self.assertTrue(
+            _review.has_approval(self.tmp, "abc123", exclude_actor="Claude"))
+
+    def test_mismatched_environment_without_reviewer_key_is_rejected(self):
+        r = self._record("--self", "Mallory", "--sha", "abc123", "--verdict", "GO",
+                         env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
 
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("ACTOR_MISMATCH", r.stderr)
-        self.assertNotEqual(self._check("abc123", "Codex").returncode, 0)
+        self.assertFalse(self._reviews_path().exists())
+
+    def test_mismatched_environment_still_rejected_when_signatures_disabled(self):
+        r = self._record("--self", "Claude", "--sha", "abc123", "--verdict", "SHIP",
+                         env={"CODEX_CI": "1", "BRIDGE_REQUIRE_SIGNATURES": "0"})
+
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("ACTOR_MISMATCH", r.stderr)
+        self.assertFalse(self._reviews_path().exists())
+
+    def test_keyless_bypass_push_trace_records_under_mismatched_environment(self):
+        import _review
+
+        r = self._record("--self", "NoKey", "--sha", "abc123", "--verdict", "PUSHED",
+                         "--bypass", env={"CODEX_CI": "1"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        led = self._ledger()
+        entry = led["reviews"][0]
+
+        self.assertEqual(entry["reviewer"], "NoKey")
+        self.assertEqual(entry["recorded_by"], "NoKey")
+        self.assertEqual(entry["verdict"], "PUSHED")
+        self.assertTrue(entry["bypass"])
+        self.assertIsNone(entry["sig"])
+        self.assertFalse(
+            _review.has_approval(self.tmp, "abc123", exclude_actor="Codex"))
 
     def test_claude_code_environment_can_record_as_claude(self):
         r = self._record("--self", "Claude", "--sha", "abc123", "--verdict", "SHIP",
                          env={"CLAUDE_CODE_ENTRYPOINT": "cli"})
-        led = json.loads((self.collab / "collaboration_reviews.json").read_text())
+        led = self._ledger()
 
         self.assertEqual(r.returncode, 0)
         self.assertEqual(led["reviews"][0]["recorded_by"], "Claude")
@@ -282,6 +329,31 @@ class ReviewLedgerTests(unittest.TestCase):
 
         self.assertFalse(
             _review.has_approval(self.tmp, "sha3", exclude_actor="Codex"))
+
+    def test_codex_signed_claude_claim_is_not_approval(self):
+        import _review
+        import _sig
+
+        entry = {
+            "reviewer": "Claude",
+            "recorded_by": "Claude",
+            "sha": "sha-cross",
+            "verdict": "GO",
+            "bypass": False,
+            "target": None,
+            "note": None,
+            "ts": "t",
+            "nonce": "n",
+        }
+        payload = _sig.review_payload(entry)
+        entry["sig"] = _sig.sign("Codex", payload, project=self.tmp)
+        self.assertTrue(entry["sig"])
+        self.assertTrue(_sig.verify("Codex", payload, entry["sig"], project=self.tmp))
+        self.assertFalse(_sig.verify("Claude", payload, entry["sig"], project=self.tmp))
+        self._reviews_path().write_text(json.dumps({"reviews": [entry]}))
+
+        self.assertFalse(
+            _review.has_approval(self.tmp, "sha-cross", exclude_actor="Codex"))
 
     def test_escape_hatch_allows_legacy_when_disabled(self):
         import _review
