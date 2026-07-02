@@ -220,6 +220,94 @@ class SessionSummaryTests(unittest.TestCase):
         self.assertLessEqual(len(summary["highlights"][-1]), len("Jack: ") + 80)
 
 
+class ChatStatusModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        collab = pathlib.Path(self.tmp) / ".collab"
+        collab.mkdir()
+        (collab / "collaboration_signal.json").write_text(json.dumps({"update_id": 0}))
+        (collab / "collaboration.md").write_text("# Board\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _online_row(self, name="Claude", now=None):
+        status = cw.chat_status(self.tmp, now=now)
+        return {row["name"]: row for row in status["online"]}[name]
+
+    def test_status_online_mode_is_pane_when_presence_alive(self):
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [{"name": "Claude", "last_seen": cw.now_str()}]
+        }))
+
+        row = self._online_row()
+
+        self.assertEqual(row["mode"], "pane")
+        self.assertTrue(row["writable"])
+        self.assertIn("online", row)
+        self.assertTrue(row["online"])
+
+    def test_status_online_mode_is_responder_when_only_responder_alive(self):
+        now = time.time()
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [{"name": "Claude", "last_seen": _stamp(now - 4000)}]
+        }))
+        orig = cw.responder_owner_alive
+        cw.responder_owner_alive = lambda project, name: name == "Claude"
+        try:
+            row = self._online_row(now=now)
+        finally:
+            cw.responder_owner_alive = orig
+
+        self.assertEqual(row["mode"], "responder")
+        self.assertFalse(row["writable"])
+        self.assertIn("online", row)
+        self.assertTrue(row["online"])
+
+    def test_status_online_mode_prefers_pane_when_pane_and_responder_alive(self):
+        pathlib.Path(self.tmp, ".collab", "collaboration_participants.json").write_text(json.dumps({
+            "participants": [{"name": "Claude", "last_seen": cw.now_str()}]
+        }))
+        orig = cw.responder_owner_alive
+        cw.responder_owner_alive = lambda project, name: name == "Claude"
+        try:
+            row = self._online_row()
+        finally:
+            cw.responder_owner_alive = orig
+
+        self.assertEqual(row["mode"], "pane")
+        self.assertTrue(row["writable"])
+        self.assertIn("online", row)
+        self.assertTrue(row["online"])
+
+    def test_status_online_mode_is_offline_when_no_presence_or_responder(self):
+        orig = cw.responder_owner_alive
+        cw.responder_owner_alive = lambda project, name: False
+        try:
+            row = self._online_row()
+        finally:
+            cw.responder_owner_alive = orig
+
+        self.assertEqual(row["mode"], "offline")
+        self.assertFalse(row["writable"])
+        self.assertIn("online", row)
+        self.assertFalse(row["online"])
+
+
+class PageTemplateTests(unittest.TestCase):
+    def test_presence_renderer_labels_modes_with_safe_text_nodes(self):
+        page = cw._PAGE
+
+        self.assertIn("function presenceInfo(row)", page)
+        self.assertIn("✍️ writable", page)
+        self.assertIn("💬 read-only", page)
+        self.assertIn("⚪ offline", page)
+        self.assertIn("presence.replaceChildren", page)
+        self.assertIn("span.textContent=info.label", page)
+        self.assertIn("span.title=info.title", page)
+        self.assertNotIn("document.getElementById('presence').innerHTML", page)
+
+
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -401,8 +489,8 @@ class ServerRoundTripTests(unittest.TestCase):
             {"name": "Codex", "alive": False},
         ])
         self.assertEqual(status["online"], [
-            {"name": "Claude", "online": False},
-            {"name": "Codex", "online": False},
+            {"name": "Claude", "online": False, "mode": "offline", "writable": False},
+            {"name": "Codex", "online": False, "mode": "offline", "writable": False},
         ])
 
     def test_status_ignores_registered_agent_not_in_default_roster(self):
@@ -814,11 +902,14 @@ class ServerRoundTripTests(unittest.TestCase):
         self.assertIn("id=presence", page)
         self.assertIn("/status", page)
 
-    def test_index_prefers_status_online_for_presence_dot(self):
+    def test_index_renders_status_online_modes_for_presence_line(self):
         page = self._get("/")
 
         self.assertIn("const online=st.online||st.presence||st.responders||[];", page)
-        self.assertIn("r.online!==undefined?r.online:r.alive", page)
+        self.assertIn("function presenceInfo(row)", page)
+        self.assertIn("presence.replaceChildren", page)
+        self.assertIn("span.textContent=info.label", page)
+        self.assertIn("span.title=info.title", page)
 
     def test_index_uses_english_public_ui(self):
         page = self._get("/")

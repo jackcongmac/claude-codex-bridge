@@ -349,8 +349,18 @@ def chat_status(project, now=None):
     presence_rows = participant_liveness(project, now=now)
     pres_alive = {row["name"]: bool(row.get("alive")) for row in presence_rows}
     resp_alive = {row["name"]: bool(row.get("alive")) for row in responders}
-    online = [{"name": name, "online": pres_alive.get(name, False) or resp_alive.get(name, False)}
-              for name in peers]
+    online = []
+    for name in peers:
+        pane = pres_alive.get(name, False)
+        responder = resp_alive.get(name, False)
+        if pane:
+            mode, writable = "pane", True
+        elif responder:
+            mode, writable = "responder", False
+        else:
+            mode, writable = "offline", False
+        online.append({"name": name, "online": pane or responder,
+                       "mode": mode, "writable": writable})
     return {"typing": typing, "presence": presence_rows,
             "responders": responders, "online": online}
 
@@ -476,6 +486,26 @@ AT.addEventListener('mousedown',e=>{const d=e.target.closest('div[data-i]');if(!
 msg.addEventListener('input',showAt);
 msg.addEventListener('blur',()=>setTimeout(()=>{AT.style.display='none';},150));
 function fmtTime(m){const s=m.sent_at||m.ts||'';const t=s.match(/\\d{2}:\\d{2}/);return t?t[0]:'';}
+function presenceInfo(row){
+  const name=String((row&&row.name)||'');
+  const online=!!(row&&(row.online!==undefined?row.online:row.alive));
+  const mode=row&&row.mode?row.mode:(online?'pane':'offline');
+  if(mode==='pane')return {label:`${name} ✍️ writable`,title:'Writable pane: can reply and make code changes.'};
+  if(mode==='responder')return {label:`${name} 💬 read-only`,title:'Read-only responder: can reply in chat, but cannot edit files or run commands.'};
+  return {label:`${name} ⚪ offline`,title:'Offline: no writable pane or read-only responder is alive.'};
+}
+function renderPresence(rows){
+  const presence=document.getElementById('presence');
+  const nodes=[];
+  rows.forEach((row,i)=>{
+    if(i)nodes.push(document.createTextNode(' · '));
+    const info=presenceInfo(row),span=document.createElement('span');
+    span.textContent=info.label;
+    span.title=info.title;
+    nodes.push(span);
+  });
+  presence.replaceChildren(...nodes);
+}
 async function load(){
   let ms; try{ms=await (await fetch('/messages')).json();}catch(e){return;}
   let st={typing:[],responders:[]}; try{st=await (await fetch('/status')).json();}catch(e){}
@@ -492,7 +522,7 @@ async function load(){
   }
   document.getElementById('typing').textContent=st.typing.length?`${st.typing.join(', ')} thinking…`:'';
   const online=st.online||st.presence||st.responders||[];
-  document.getElementById('presence').textContent=online.map(r=>`${r.name}:${(r.online!==undefined?r.online:r.alive)?'online':'offline'}`).join(' · ');
+  renderPresence(online);
 }
 async function loadSessions(){
   const past=document.getElementById('past'),list=document.getElementById('pastlist');
