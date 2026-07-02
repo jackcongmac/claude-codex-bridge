@@ -9,6 +9,7 @@ board-wait. Pure stdlib — no install, no deps.
 CLI: bridge-chat-web.py [--self <Me>] [--project DIR] [--port N] [--no-open]
 """
 import argparse
+import atexit
 import base64
 import errno
 import html
@@ -33,6 +34,7 @@ from _post import post as _board_post  # noqa: E402
 from _liveness import verdict as liveness_verdict  # noqa: E402
 import _sig  # noqa: E402
 import _chat_roles  # noqa: E402
+import _chat_server  # noqa: E402
 
 _ENTRY = re.compile(r'### (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[^\n]*)\n+(.*)', re.S)
 _SPEAKER = re.compile(r'\*\*(.+?):\*\*\s?(.*)', re.S)
@@ -858,13 +860,24 @@ def make_server(project, self_name, port):
     return httpd, httpd.server_address[1]
 
 
-def make_server_with_default_fallback(project, self_name, preferred_port=8765):
+def make_server_with_default_fallback(project, self_name, preferred_port=None):
+    if preferred_port is None:
+        preferred_port = _chat_server.preferred_port(find_project_root(project))
     try:
         return make_server(project, self_name, preferred_port)
     except OSError as e:
         if e.errno != errno.EADDRINUSE:
             raise
         return make_server(project, self_name, 0)
+
+
+def _clear_registered_server(project):
+    if project:
+        _chat_server.clear_server_info(project, os.getpid())
+
+
+def _sigterm_as_keyboard_interrupt(signum, frame):
+    raise KeyboardInterrupt
 
 
 def serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interval,
@@ -879,6 +892,7 @@ def serve_chat(httpd, responders, supervisor_stop, supervisor, supervisor_interv
             supervisor_stop if responders else None,
             supervisor,
             join_timeout=supervisor_interval + 2)
+        _clear_registered_server(getattr(httpd, "project", None))
         httpd.server_close()
     return 0
 
@@ -892,11 +906,22 @@ def main():
     ap.add_argument("--no-responders", action="store_true",
                     help="don't auto-start the Claude/Codex chat responders")
     a = ap.parse_args()
+    project = find_project_root(a.project)
+    info = _chat_server.read_server_info(project)
+    if _chat_server.is_running(
+            info, alive=_chat_server._pid_alive, port_open=_chat_server._port_open):
+        url = info.get("url") or "http://127.0.0.1:%d" % int(info.get("port"))
+        print("群聊已在运行:%s" % url)
+        return 0
     if a.port is None:
-        httpd, port = make_server_with_default_fallback(a.project, a.self_name)
+        httpd, port = make_server_with_default_fallback(project, a.self_name)
     else:
-        httpd, port = make_server(a.project, a.self_name, a.port)
+        httpd, port = make_server(project, a.self_name, a.port)
     url = "http://127.0.0.1:%d" % port
+    _chat_server.write_server_info(
+        httpd.project, port, os.getpid(), time.strftime("%Y-%m-%dT%H:%M:%S"))
+    atexit.register(_clear_registered_server, httpd.project)
+    signal.signal(signal.SIGTERM, _sigterm_as_keyboard_interrupt)
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
     responders = [] if a.no_responders else start_responders(httpd.project)
     supervisor_stop = threading.Event()
