@@ -1,4 +1,3 @@
-X
 # claude-codex-bridge
 
 > Let **Claude Code** and **Codex** call each other as tools — and make the Claude

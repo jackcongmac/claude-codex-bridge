@@ -9,10 +9,10 @@ DEMO_GIF = ROOT / "docs" / "assets" / "claude-codex-bridge-demo.gif"
 
 
 class ReadmeDemoAssetTests(unittest.TestCase):
-    def test_readme_starts_with_x_line(self):
+    def test_readme_starts_with_project_title(self):
         readme = README.read_text(encoding="utf-8")
 
-        self.assertTrue(readme.startswith("X\n"))
+        self.assertEqual(readme.splitlines()[0], "# claude-codex-bridge")
 
     def test_readme_embeds_terminal_demo_gif(self):
         readme = README.read_text(encoding="utf-8")
