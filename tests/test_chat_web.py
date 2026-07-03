@@ -307,6 +307,20 @@ class PageTemplateTests(unittest.TestCase):
         self.assertIn("span.title=info.title", page)
         self.assertNotIn("document.getElementById('presence').innerHTML", page)
 
+    def test_template_promotes_project_name_as_group_title(self):
+        page = (cw._PAGE
+                .replace("__SELF__", "Jack")
+                .replace("__PROJECT__", "claude-codex-bridge")
+                .replace("__PROJECTPATH__", "/Volumes/WorkHD/Projects/claude-codex-bridge"))
+
+        self.assertIn(
+            '<header><b id=group title="/Volumes/WorkHD/Projects/claude-codex-bridge">'
+            'Group chat · claude-codex-bridge</b>',
+            page,
+        )
+        self.assertIn('<span id=viewer title="Signed in as Jack">Jack</span>', page)
+        self.assertNotIn("<b>Group chat · Jack</b>", page)
+
 
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):
@@ -392,16 +406,21 @@ class ServerRoundTripTests(unittest.TestCase):
             httpd.server_close()
             thread.join(timeout=1)
 
-    def test_index_header_shows_project_name_with_full_path_tooltip(self):
+    def test_index_header_shows_group_name_with_full_path_tooltip(self):
         page = self._get("/")
         root = os.path.abspath(self.tmp)
         project = os.path.basename(os.path.normpath(root)) or root
 
         self.assertIn(
-            '<header><b>Group chat · Jack</b><span id=proj title="%s">%s</span>' % (
+            '<header><b id=group title="%s">Group chat · %s</b>' % (
                 html.escape(root, quote=True),
                 html.escape(project),
             ),
+            page,
+        )
+        self.assertNotIn("<b>Group chat · Jack</b>", page)
+        self.assertIn(
+            '<span id=viewer title="Signed in as Jack">Jack</span>',
             page,
         )
 
@@ -916,7 +935,7 @@ class ServerRoundTripTests(unittest.TestCase):
         project = os.path.basename(os.path.normpath(os.path.abspath(self.tmp))) or os.path.abspath(self.tmp)
 
         self.assertIn("<title>Group chat — %s</title>" % html.escape(project), page)
-        self.assertIn("Group chat · Jack", page)
+        self.assertIn("Group chat · %s" % html.escape(project), page)
         self.assertIn("title=Close", page)
         self.assertIn("Type a message", page)
         self.assertIn(">Send</button>", page)

@@ -399,7 +399,8 @@ def participant_liveness(project, now=None):
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Group chat — __PROJECT__</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:center}
-#proj{color:#9a9a9a;font-size:12px;margin-left:8px;overflow:hidden;text-overflow:ellipsis;max-width:40%;white-space:nowrap}
+#group{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#viewer{color:#9a9a9a;font-size:12px;margin-left:8px;overflow:hidden;text-overflow:ellipsis;max-width:32%;white-space:nowrap;flex-shrink:0}
 #close{cursor:pointer;font-size:20px;color:#bbb;margin-left:auto}#close:hover{color:#fff}
 #past{display:none;padding:8px 12px;background:#f4f4f4;border-bottom:1px solid #ddd;color:#777;font-size:12px}
 #past summary{cursor:pointer;color:#666}#pastlist{margin-top:6px}
@@ -427,7 +428,7 @@ footer{display:flex;padding:8px;background:#f7f7f7;border-top:1px solid #ddd;pos
 button{margin-left:8px;padding:0 16px;border:0;border-radius:6px;background:#07c160;color:#fff;font-size:15px;cursor:pointer}
 button:disabled{opacity:.55;cursor:default}
 </style></head><body>
-<header><b>Group chat · __SELF__</b><span id=proj title="__PROJECTPATH__">__PROJECT__</span><span id=close title=Close>✕</span></header>
+<header><b id=group title="__PROJECTPATH__">Group chat · __PROJECT__</b><span id=viewer title="Signed in as __SELF__">__SELF__</span><span id=close title=Close>✕</span></header>
 <details id=past><summary>过往会话</summary><div id=pastlist></div></details>
 <div id=log></div>
 <div id=typing></div>
