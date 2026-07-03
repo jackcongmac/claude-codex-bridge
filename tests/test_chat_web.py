@@ -321,6 +321,11 @@ class PageTemplateTests(unittest.TestCase):
         self.assertIn('<span id=viewer title="Signed in as Jack">Jack</span>', page)
         self.assertNotIn("<b>Group chat · Jack</b>", page)
 
+    def test_group_title_has_visible_flex_region(self):
+        page = cw._PAGE
+
+        self.assertRegex(page, r"#group\{[^}]*flex:1 1 auto")
+
 
 class ServerRoundTripTests(unittest.TestCase):
     def setUp(self):

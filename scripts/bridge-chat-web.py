@@ -399,7 +399,7 @@ def participant_liveness(project, now=None):
 _PAGE = """<!doctype html><html><head><meta charset=utf-8><title>Group chat — __PROJECT__</title><style>
 body{font-family:-apple-system,system-ui,sans-serif;margin:0;background:#ededed;height:100vh;display:flex;flex-direction:column}
 header{background:#393a3f;color:#eee;padding:10px 14px;display:flex;align-items:center}
-#group{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#group{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #viewer{color:#9a9a9a;font-size:12px;margin-left:8px;overflow:hidden;text-overflow:ellipsis;max-width:32%;white-space:nowrap;flex-shrink:0}
 #close{cursor:pointer;font-size:20px;color:#bbb;margin-left:auto}#close:hover{color:#fff}
 #past{display:none;padding:8px 12px;background:#f4f4f4;border-bottom:1px solid #ddd;color:#777;font-size:12px}
