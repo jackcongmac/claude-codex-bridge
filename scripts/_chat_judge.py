@@ -105,16 +105,20 @@ def classify(text, context, call_llm, image_path=None):
 
 
 def default_call_llm(prompt, image_path=None):
-    """Spawn a headless model and return its stdout."""
+    """Spawn a headless model and return its stdout. The judge is a cheap JSON classifier —
+    pin it to Haiku (not the inherited Opus default) so classification costs ~10-15x less.
+    Override with BRIDGE_CHAT_JUDGE_MODEL."""
     claude = os.environ.get("CLAUDE_BIN") or "claude"
+    model = os.environ.get("BRIDGE_CHAT_JUDGE_MODEL") or "claude-haiku-4-5-20251001"
     if image_path:
-        cmd = [claude, "-p", prompt, "--output-format", "json", "--strict-mcp-config",
-               "--mcp-config", '{"mcpServers":{}}', "--permission-mode", "default",
+        cmd = [claude, "-p", prompt, "--model", model, "--output-format", "json",
+               "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+               "--permission-mode", "default",
                "--allowedTools", "Read", "Grep", "Glob"]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
         return json.loads(r.stdout).get("result") or ""
     return subprocess.run(
-        [claude, "-p", prompt],
+        [claude, "-p", prompt, "--model", model],
         capture_output=True,
         text=True,
         timeout=120,

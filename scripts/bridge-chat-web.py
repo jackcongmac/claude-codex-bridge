@@ -953,7 +953,12 @@ def main(argv=None, responder_spawn=None, execute_spawn=None, stop_execute=None,
     ap.add_argument("--port", type=int, default=None)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--no-responders", action="store_true",
-                    help="don't auto-start the Claude/Codex chat responders")
+                    help="(deprecated no-op: auto-responders are OFF by default now)")
+    ap.add_argument("--responders", action="store_true",
+                    help="opt in to the always-on auto-responders (token-heavy: they reply "
+                         "to every message and chat with each other). OFF by default.")
+    ap.add_argument("--no-execute", action="store_true",
+                    help="don't auto-start the on-demand chat->execution supervisor")
     a = ap.parse_args(argv)
     make_server_default = make_server_default or make_server_with_default_fallback
     make_server_explicit = make_server_explicit or make_server
@@ -977,10 +982,14 @@ def main(argv=None, responder_spawn=None, execute_spawn=None, stop_execute=None,
     print("群聊已打开:%s  (Ctrl-C 或页面右上角 ✕ 关闭)" % url)
     responders = []
     execute_supervisors = []
-    if not a.no_responders:
+    # Slim default: NO always-on auto-responders. They LLM-reply to EVERY message and
+    # ping-pong with each other — that was the token burn. Opt in with --responders only
+    # if you really want a live agent-chat room.
+    if a.responders and not a.no_responders:
         responders = start_responders(httpd.project, spawn=responder_spawn)
-        # --no-responders is the existing "no background automation" switch for
-        # read-only/test windows, so the always-on capture supervisor follows it.
+    # The on-demand chat->execution supervisor stays on by default: it's the cheap
+    # "对话即执行" core — fires only on a new signed directive, idle polls spawn no LLM.
+    if not a.no_execute:
         execute_supervisors = start_execute_supervisor(httpd.project, spawn=execute_spawn)
     supervisor_stop = threading.Event()
     supervisor = None

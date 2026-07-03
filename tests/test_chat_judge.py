@@ -1,3 +1,4 @@
+import os
 import pathlib
 import sys
 import unittest
@@ -148,6 +149,43 @@ class ChatJudgeTests(unittest.TestCase):
         self.assertIn("Read", captured["cmd"])
         self.assertIn("--permission-mode", captured["cmd"])
         self.assertEqual(captured["kwargs"]["timeout"], 180)
+
+
+    def test_default_call_llm_pins_judge_to_haiku(self):
+        captured = {}
+
+        def fake_run(cmd, *a, **k):
+            captured["cmd"] = cmd
+            return type("R", (), {"stdout": "{}"})()
+
+        old_run, old_env = judge.subprocess.run, os.environ.pop("BRIDGE_CHAT_JUDGE_MODEL", None)
+        try:
+            judge.subprocess.run = fake_run
+            judge.default_call_llm("classify this")
+            self.assertIn("--model", captured["cmd"])
+            self.assertEqual(captured["cmd"][captured["cmd"].index("--model") + 1],
+                             "claude-haiku-4-5-20251001")
+        finally:
+            judge.subprocess.run = old_run
+            if old_env is not None:
+                os.environ["BRIDGE_CHAT_JUDGE_MODEL"] = old_env
+
+    def test_default_call_llm_model_is_overridable(self):
+        captured = {}
+
+        def fake_run(cmd, *a, **k):
+            captured["cmd"] = cmd
+            return type("R", (), {"stdout": "{}"})()
+
+        old_run = judge.subprocess.run
+        os.environ["BRIDGE_CHAT_JUDGE_MODEL"] = "custom-model"
+        try:
+            judge.subprocess.run = fake_run
+            judge.default_call_llm("classify this")
+            self.assertEqual(captured["cmd"][captured["cmd"].index("--model") + 1], "custom-model")
+        finally:
+            judge.subprocess.run = old_run
+            os.environ.pop("BRIDGE_CHAT_JUDGE_MODEL", None)
 
 
 if __name__ == "__main__":

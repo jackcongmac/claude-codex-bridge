@@ -1103,15 +1103,20 @@ class ServerLifecycleTests(unittest.TestCase):
 
         expected = [[str(SCRIPTS / "bridge-chat-execute.sh"), "--project", os.path.abspath(self.tmp)]]
         exec_cmds = [cmd for cmd in spawned if cmd[0].endswith("bridge-chat-execute.sh")]
+        resp_cmds = [cmd for cmd in spawned if cmd[0].endswith("bridge-chat-respond.sh")]
         self.assertEqual(status, 0)
         self.assertEqual(exec_cmds, expected)
+        # Slim default: NO auto-responders (they were the token burn), execute supervisor ON.
+        self.assertEqual(resp_cmds, [])
         self.assertEqual([h.cmd for h in stopped], expected)
         self.assertTrue(server.closed)
 
-    def test_main_no_responders_suppresses_execute_supervisor_autostart(self):
+    def _slim_server(self):
+        tmp = self.tmp
+
         class Server:
-            def __init__(self, project):
-                self.project = os.path.abspath(project)
+            def __init__(self):
+                self.project = os.path.abspath(tmp)
                 self.server_address = ("127.0.0.1", 8765)
                 self.closed = False
 
@@ -1121,19 +1126,40 @@ class ServerLifecycleTests(unittest.TestCase):
             def server_close(self):
                 self.closed = True
 
-        server = Server(self.tmp)
-        spawned = []
+        return Server()
 
+    def _run_main(self, extra_argv):
+        server = self._slim_server()
+        spawned = []
         status = cw.main(
-            argv=["--self", "Jack", "--project", self.tmp, "--no-open", "--no-responders"],
+            argv=["--self", "Jack", "--project", self.tmp, "--no-open"] + extra_argv,
             responder_spawn=lambda cmd: spawned.append(cmd),
             execute_spawn=lambda cmd: spawned.append(cmd),
+            stop_execute=lambda handles: None,
             make_server_default=lambda project, self_name: (server, 8765),
             browser_open=lambda url: self.fail("test must not open a browser"))
-
         self.assertEqual(status, 0)
-        self.assertEqual(spawned, [])
-        self.assertTrue(server.closed)
+        resp = [c for c in spawned if c and c[0].endswith("bridge-chat-respond.sh")]
+        execu = [c for c in spawned if c and c[0].endswith("bridge-chat-execute.sh")]
+        return resp, execu
+
+    def test_main_responders_optin_starts_them(self):
+        # --responders opts INTO the (token-heavy) auto-responders; execute stays on.
+        resp, execu = self._run_main(["--responders"])
+        self.assertEqual(len(resp), len(cw._chat_peers(os.path.abspath(self.tmp))))
+        self.assertTrue(execu)
+
+    def test_main_no_execute_suppresses_only_execute_supervisor(self):
+        # --no-execute stops the on-demand executor; still no responders by default.
+        resp, execu = self._run_main(["--no-execute"])
+        self.assertEqual(resp, [])
+        self.assertEqual(execu, [])
+
+    def test_main_no_responders_flag_is_a_noop_execute_still_on(self):
+        # Deprecated --no-responders: responders already off by default; execute unaffected.
+        resp, execu = self._run_main(["--no-responders"])
+        self.assertEqual(resp, [])
+        self.assertTrue(execu)
 
 
 if __name__ == "__main__":
