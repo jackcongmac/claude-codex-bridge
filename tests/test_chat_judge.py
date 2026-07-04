@@ -151,6 +151,14 @@ class ChatJudgeTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["timeout"], 180)
 
 
+    def test_prompt_is_strict_and_forbids_task_hallucination_from_context(self):
+        ctx = [{"speaker": "Claude", "text": "old proposal discussion"} for _ in range(8)]
+        p = judge._build_prompt("好", ctx)
+        self.assertIn("NEVER invent", p)
+        self.assertIn("ONLY from the words of the LATEST message", p)
+        self.assertIn('"opinion"', p)
+        self.assertEqual(p.count('"speaker"'), 3)  # context capped to 3 (was 8)
+
     def test_default_call_llm_pins_judge_to_haiku(self):
         captured = {}
 

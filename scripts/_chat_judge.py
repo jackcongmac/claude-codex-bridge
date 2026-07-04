@@ -22,7 +22,7 @@ def _safe_ambiguous():
 
 def _build_prompt(text, context):
     recent = []
-    for msg in (context or [])[-8:]:
+    for msg in (context or [])[-3:]:   # minimal context — reference ONLY, never a task source
         if not isinstance(msg, dict):
             continue
         recent.append({
@@ -30,24 +30,37 @@ def _build_prompt(text, context):
             "text": str(msg.get("text", "")),
         })
 
-    return """You classify ONE latest human message in a software-development group chat.
+    return """You are a STRICT gatekeeper classifying ONE latest human message in a
+software-development group chat. A wrong "actionable" makes the team AUTO-RUN code, so
+be conservative: when in doubt, DO NOT say actionable.
 
-Decide whether the human is directing the team to DO, implement, fix, run, change,
-or otherwise act now ("actionable"), asking the team to remember/track a future
-requirement without doing it now ("record_requirement"), merely discussing or
-giving an opinion ("opinion"), or unclear enough that the team should ask a
-follow-up ("ambiguous").
+Classify the LATEST message as exactly one of:
+- "actionable": the LATEST message ITSELF contains a concrete, self-contained instruction
+  to do/implement/fix/run/change something now (e.g. "add a Y function to file X",
+  "rename Z to W", "run the tests"). The instruction must be explicit IN THE LATEST MESSAGE.
+- "record_requirement": the LATEST message explicitly asks to remember/track a future
+  requirement without doing it now (e.g. "note that we should later support X").
+- "opinion": greetings, acknowledgements, vague affirmations ("好", "ok", "yes", "hello",
+  "在吗", "谢谢", "嗯"), questions, discussion, or anything with no concrete instruction.
+- "ambiguous": the human clearly wants SOMETHING done but the latest message is too
+  underspecified to extract a task — give a short clarifying question.
 
-If actionable, extract a concrete task the team can execute. If record_requirement,
-extract the durable task/requirement to remember but not run. If ambiguous, provide
-a short clarifying question. Reply with ONLY one JSON object and no prose, no
-Markdown, no code fences:
+HARD RULES (violating these causes wrong auto-execution):
+- Extract the task ONLY from the words of the LATEST message. NEVER invent, infer, or
+  carry a task over from the prior context. Context is ONLY to resolve pronouns/references
+  ("it", "that file") — it is NEVER the source of the task.
+- A bare affirmation/greeting/question with no concrete instruction of its own is
+  "opinion", NOT actionable — even if the prior context discussed work to do. A vague
+  "好"/"ok"/"proceed" is NOT a directive on its own.
+- Prefer "opinion"/"ambiguous" over "actionable" whenever unsure.
+
+Reply with ONLY one JSON object, no prose/Markdown/fences:
 {"kind":"actionable|record_requirement|opinion|ambiguous","task":"...","question":"..."}
 
-Prior context, oldest to newest, up to the last 8 messages:
+Prior context (reference ONLY — NEVER a source of the task), up to last 3 messages:
 %s
 
-Latest human message:
+Latest human message (classify THIS; extract any task ONLY from here):
 %s
 """ % (
         json.dumps(recent, ensure_ascii=False, indent=2),
