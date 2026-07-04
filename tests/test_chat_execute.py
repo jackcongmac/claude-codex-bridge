@@ -423,6 +423,10 @@ class ExecuteOnceTests(unittest.TestCase):
             f.write("# Board\n\n## Chat\n\n### 2026-06-29 10:00:00 PDT\n\n%s\n"
                     % self._signed_line("把④英文化做了", "default-task"))
         self.posts = []
+        # These tests exercise the processing path; arm with an empty watermark ("" skips
+        # nothing) so the first execute_once processes the setup message rather than just
+        # baselining it. Watermark-behavior itself is covered by its own tests below.
+        ce._set_watermark(self.tmp, "")
 
     def tearDown(self):
         if self._old_keys_dir is None:
@@ -1331,6 +1335,46 @@ class ExecuteOnceTests(unittest.TestCase):
         self.assertLessEqual(len(state["messages"]), 500)
         self.assertNotIn("id-000", state["messages"])
         self.assertIn("id-599", state["messages"])
+
+    def test_first_run_arms_watermark_and_skips_backlog(self):
+        # Fresh (no watermark): the first execute_once baselines the existing board and
+        # processes NOTHING — the pre-existing backlog must never be retro-judged/executed.
+        os.remove(ce._watermark_path(self.tmp))  # undo setUp's empty watermark
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            st = ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: self.fail("backlog must not be judged"),
+                executor=lambda *a, **k: self.fail("backlog must not execute"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+        self.assertEqual(st, "armed")
+        self.assertEqual(self.posts, [])
+        self.assertIsNotNone(ce._get_watermark(self.tmp))
+
+    def test_only_messages_after_watermark_are_processed(self):
+        # Watermark at the old message's ts: the old one is skipped, only the NEWER one is judged.
+        ce._set_watermark(self.tmp, "2026-06-29 10:00:00 PDT")
+        with open(os.path.join(self.tmp, ".collab", "collaboration.md"), "w") as f:
+            f.write("# Board\n\n## Chat\n\n"
+                    "### 2026-06-29 11:00:00 PDT\n\n%s\n"
+                    "### 2026-06-29 10:00:00 PDT\n\n%s\n" % (
+                        self._signed_line("新指令做⑤", "new-task"),
+                        self._signed_line("老消息别碰", "old-task")))
+        seen = []
+        os.environ["BRIDGE_CHAT_EXECUTE"] = "1"
+        try:
+            ce.execute_once(
+                self.tmp,
+                judge=lambda t, c, image_path=None: (
+                    seen.append(t) or {"kind": "record_requirement", "task": t}),
+                executor=lambda *a, **k: self.fail("record-only must not execute"),
+                poster=self.posts.append)
+        finally:
+            os.environ.pop("BRIDGE_CHAT_EXECUTE", None)
+        self.assertEqual(seen, ["新指令做⑤"])  # only ts > watermark judged; old skipped
+
 
 class MsgKeyTests(unittest.TestCase):
     def test_id_bearing_message_key_is_unchanged(self):

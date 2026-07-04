@@ -443,6 +443,27 @@ def _claim_is_stale(entry):
         return True
 
 
+def _watermark_path(project):
+    return os.path.join(collab_paths(find_project_root(project))["dir"],
+                        "chat_execute_watermark.json")
+
+
+def _get_watermark(project):
+    """The board ts captured when execution first armed. Messages at/before it are the
+    pre-existing backlog and are NEVER retro-processed — only messages that arrive AFTER
+    arming trigger. A single durable field (not per-message), so the handled-state 500-cap
+    can't defeat it. None = not armed yet."""
+    try:
+        d = read_json(_watermark_path(project), default={}) or {}
+    except (RuntimeError, ValueError):
+        return None
+    return d.get("ts") if isinstance(d, dict) and isinstance(d.get("ts"), str) else None
+
+
+def _set_watermark(project, ts):
+    atomic_write_json(_watermark_path(project), {"ts": ts or ""})
+
+
 def _claim_next_message(project, msgs):
     run_id = "chat-execute-%s-%s" % (os.getpid(), uuid.uuid4().hex)
     lock_path = _execute_lock_path(project)
@@ -453,9 +474,12 @@ def _claim_next_message(project, msgs):
         messages = state.setdefault("messages", {})
         warnings = []
         changed = False
+        watermark = _get_watermark(project)
         for idx, msg in enumerate(msgs):
             if not _chat_roles.is_human(msg.get("speaker", ""), project):
                 continue
+            if watermark and (msg.get("ts") or "") <= watermark:
+                continue  # pre-arm backlog — never retro-process
             mid = _msg_key(msg)
             entry = messages.get(mid) or {}
             cur = entry.get("state")
@@ -546,6 +570,12 @@ def execute_once(project, judge=None, executor=None, poster=None):
         collab_paths(find_project_root(project))["board"], "Chat"))
     if not msgs:
         return "empty"
+    # First run baseline: everything already on the board is the pre-existing backlog.
+    # Set the watermark and process NOTHING old — only messages posted after this moment
+    # will ever trigger. Prevents the executor from churning a large chat history on arm.
+    if _get_watermark(project) is None:
+        _set_watermark(project, msgs[-1].get("ts") or "")
+        return "armed"
     if poster is None:
         lead = _poster_speaker(project)
         fmt = _format_chat_fn()
