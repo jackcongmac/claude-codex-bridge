@@ -5,6 +5,7 @@ P0 keeps this intentionally linear: create a clean branch, run the injected
 implement/review/fix loop, sign exact evidence, verify exact heads, and open a PR.
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -65,8 +66,24 @@ def _diffstat(root, base, head):
     return _git(root, "diff", "--stat", "%s..%s" % (base, head), check=False)
 
 
+def _print_dry_run_report(state, branch):
+    evidence = state["evidence"] or {}
+    plan = _pr.pr_plan(branch, evidence, state["sig"])
+    print("status: DRY_RUN")
+    print("DRY RUN — would open PR")
+    print("evidence:")
+    print(json.dumps(evidence, sort_keys=True, indent=2))
+    print("verdict: %s" % evidence.get("verdict", ""))
+    print("tests_ok: %s" % evidence.get("tests_ok", ""))
+    print("pr_title: %s" % plan["title"])
+    print("pr_base: %s" % plan["base"])
+    print("pr_head: %s" % plan["head"])
+    print("pr_body:")
+    print(plan["body"])
+
+
 def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
-                    implementer, reviewer):
+                    implementer, reviewer, dry_run=False):
     state = {
         "branch": branch,
         "verdict": "",
@@ -157,7 +174,7 @@ def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
             return {"ok": False, "pushed_sha": head,
                     "summary": "signed evidence did not verify"}
         try:
-            pr_url = _pr.open_pr(root, branch, evidence, sig, root)
+            pr_url = _pr.open_pr(root, branch, evidence, sig, root, dry_run=dry_run)
         except RuntimeError as exc:
             return {"ok": False, "pushed_sha": head, "summary": str(exc)}
         state["evidence"] = evidence
@@ -183,7 +200,8 @@ def run(args):
 
     branch = _pr.create_branch(root, base_ref, _slug(task))
     state, implement, review, push = _make_callbacks(
-        root, task, base_ref, base_sha, branch, args.test_cmd, implementer, reviewer)
+        root, task, base_ref, base_sha, branch, args.test_cmd, implementer, reviewer,
+        dry_run=args.dry_run)
     result = _chat_executor.run_task(
         root, task, implement=implement, review=review, push=push,
         max_fix_rounds=args.max_fix_rounds)
@@ -192,6 +210,9 @@ def run(args):
         print("branch: %s" % branch)
         print("summary: %s" % result.get("summary", ""))
         return 1
+    if args.dry_run:
+        _print_dry_run_report(state, branch)
+        return 0
     evidence = state["evidence"] or {}
     print("status: OPENED_PR")
     print("branch: %s" % branch)
@@ -218,6 +239,8 @@ def main(argv=None):
                     help="actor that reviews and signs the evidence")
     ap.add_argument("--max-fix-rounds", type=int, default=2,
                     help="maximum implement/fix attempts after FIX-FIRST")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="run the full PR gate but do not push or create a GitHub PR")
     ap.add_argument("task", nargs="+", help="task description")
     args = ap.parse_args(argv)
     try:

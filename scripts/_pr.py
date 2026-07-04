@@ -96,6 +96,19 @@ def _pr_base(evidence):
         or evidence.get("base") or evidence.get("base_sha", ""))
 
 
+def pr_title(branch):
+    return "AI PR Gate: %s" % branch
+
+
+def pr_plan(branch, evidence, sig):
+    return {
+        "title": pr_title(branch),
+        "base": _pr_base(evidence),
+        "head": branch,
+        "body": pr_body(evidence, sig),
+    }
+
+
 def _test_result_word(evidence):
     return "PASSED" if evidence.get("tests_ok") is True else "FAILED"
 
@@ -141,7 +154,8 @@ def pr_body(evidence, sig):
     ])
 
 
-def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run, gh=subprocess.run):
+def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run,
+            gh=subprocess.run, dry_run=False):
     if not _pr_evidence.verify(evidence, sig, project):
         raise RuntimeError("signed evidence did not verify")
     if (evidence.get("verdict") or "").upper() not in ("GO", "SHIP"):
@@ -157,6 +171,19 @@ def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run, gh=subp
     if not _pr_evidence.head_matches(evidence, local):
         raise RuntimeError("head moved since review: local HEAD does not match signed evidence")
 
+    base_head = remote_head(repo, _pr_base(evidence), run=run)
+    if base_head != evidence.get("base_sha"):
+        raise RuntimeError("base advanced since review — re-run ship")
+
+    patch_ids = branch_patch_ids(
+        repo, evidence.get("base_sha", ""), evidence.get("head_sha", ""), run=run)
+    signed_patch_ids = sorted(set(evidence.get("patch_ids") or []))
+    if patch_ids != signed_patch_ids:
+        raise RuntimeError("diff patch-ids do not match signed evidence")
+
+    if dry_run:
+        return ""
+
     _check(
         run, ["git", "-C", repo, "push", "origin", branch],
         capture_output=True, text=True)
@@ -168,7 +195,7 @@ def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run, gh=subp
     try:
         with os.fdopen(fd, "w") as f:
             f.write(pr_body(evidence, sig))
-        title = "AI PR Gate: %s" % branch
+        title = pr_title(branch)
         r = gh(
             ["gh", "pr", "create", "--head", branch,
              "--base", _pr_base(evidence),

@@ -4,7 +4,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -12,6 +16,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import _pr  # noqa: E402
 import _pr_evidence as ev  # noqa: E402
 import _ship  # noqa: E402
+import _agent_cli  # noqa: E402
+import _chat_executor  # noqa: E402
 
 BIN = ROOT / "bin" / "claude-codex-bridge"
 
@@ -165,6 +171,19 @@ class OpenPrTests(unittest.TestCase):
     def _push_commands(self, run):
         return [cmd for cmd in run.commands() if cmd[:4] == ["git", "-C", "/repo", "push"]]
 
+    def _successful_open_pr_run(self):
+        return FakeRun([
+            Result(stdout="h" * 40 + "\n"),
+            Result(stdout="b" * 40 + "\trefs/heads/main\n"),
+            Result(stdout="c2\nc1\n"),
+            Result(stdout="diff c2"),
+            Result(stdout="patch-2 c2\n"),
+            Result(stdout="diff c1"),
+            Result(stdout="patch-1 c1\n"),
+            Result(),
+            Result(stdout="h" * 40 + "\trefs/heads/ai/x\n"),
+        ])
+
     def test_head_mismatch_aborts_before_push_or_pr(self):
         evidence, sig = self._signed_evidence(head="h" * 40)
         run = FakeRun([Result(stdout="x" * 40 + "\n")])
@@ -176,10 +195,47 @@ class OpenPrTests(unittest.TestCase):
         self.assertEqual(len(run.commands()), 1)
         self.assertEqual(gh.calls, [])
 
+    def test_base_advanced_aborts_before_push_or_pr(self):
+        evidence, sig = self._signed_evidence(head="h" * 40)
+        run = FakeRun([
+            Result(stdout="h" * 40 + "\n"),
+            Result(stdout="x" * 40 + "\trefs/heads/main\n"),
+        ])
+        gh = FakeGh()
+
+        with self.assertRaisesRegex(RuntimeError, "base advanced since review"):
+            _pr.open_pr("/repo", evidence["branch"], evidence, sig, str(self.proj), run=run, gh=gh)
+
+        self.assertEqual(self._push_commands(run), [])
+        self.assertEqual(gh.calls, [])
+
+    def test_patch_id_mismatch_aborts_before_push_or_pr(self):
+        evidence, sig = self._signed_evidence(head="h" * 40)
+        run = FakeRun([
+            Result(stdout="h" * 40 + "\n"),
+            Result(stdout="b" * 40 + "\trefs/heads/main\n"),
+            Result(stdout="c1\n"),
+            Result(stdout="diff c1"),
+            Result(stdout="different-patch c1\n"),
+        ])
+        gh = FakeGh()
+
+        with self.assertRaisesRegex(RuntimeError, "diff patch-ids do not match signed evidence"):
+            _pr.open_pr("/repo", evidence["branch"], evidence, sig, str(self.proj), run=run, gh=gh)
+
+        self.assertEqual(self._push_commands(run), [])
+        self.assertEqual(gh.calls, [])
+
     def test_remote_head_mismatch_aborts_after_push_before_pr(self):
         evidence, sig = self._signed_evidence(head="h" * 40)
         run = FakeRun([
             Result(stdout="h" * 40 + "\n"),
+            Result(stdout="b" * 40 + "\trefs/heads/main\n"),
+            Result(stdout="c2\nc1\n"),
+            Result(stdout="diff c2"),
+            Result(stdout="patch-2 c2\n"),
+            Result(stdout="diff c1"),
+            Result(stdout="patch-1 c1\n"),
             Result(),
             Result(stdout="x" * 40 + "\trefs/heads/ai/x\n"),
         ])
@@ -243,11 +299,7 @@ class OpenPrTests(unittest.TestCase):
 
     def test_happy_path_opens_pr_with_correct_evidence_body(self):
         evidence, sig = self._signed_evidence(head="h" * 40)
-        run = FakeRun([
-            Result(stdout="h" * 40 + "\n"),
-            Result(),
-            Result(stdout="h" * 40 + "\trefs/heads/%s\n" % evidence["branch"]),
-        ])
+        run = self._successful_open_pr_run()
         gh = FakeGh()
 
         url = _pr.open_pr("/repo", evidence["branch"], evidence, sig, str(self.proj), run=run, gh=gh)
@@ -276,6 +328,27 @@ class OpenPrTests(unittest.TestCase):
         self.assertNotIn("Ran 4 tests", body)
         self.assertIn(ev.canonical(evidence), body)
 
+    def test_dry_run_verifies_without_push_or_gh(self):
+        evidence, sig = self._signed_evidence(head="h" * 40)
+        run = FakeRun([
+            Result(stdout="h" * 40 + "\n"),
+            Result(stdout="b" * 40 + "\trefs/heads/main\n"),
+            Result(stdout="c2\nc1\n"),
+            Result(stdout="diff c2"),
+            Result(stdout="patch-2 c2\n"),
+            Result(stdout="diff c1"),
+            Result(stdout="patch-1 c1\n"),
+        ])
+        gh = FakeGh()
+
+        url = _pr.open_pr(
+            "/repo", evidence["branch"], evidence, sig, str(self.proj),
+            run=run, gh=gh, dry_run=True)
+
+        self.assertEqual(url, "")
+        self.assertEqual(self._push_commands(run), [])
+        self.assertEqual(gh.calls, [])
+
     def test_pr_body_tests_line_uses_tests_ok_not_verdict(self):
         evidence, sig = self._signed_evidence(head="h" * 40)
         evidence["tests_ok"] = False
@@ -291,6 +364,78 @@ class TestCommandTests(unittest.TestCase):
 
         self.assertFalse(ok)
         self.assertEqual(log, "")
+
+
+class ShipDryRunTests(unittest.TestCase):
+    def test_ship_dry_run_completes_flow_and_prints_would_open_pr(self):
+        base_sha = "b" * 40
+        head_sha = "h" * 40
+        branch = "ai/dry-run-bbbbbbb"
+        open_pr_calls = []
+
+        def fake_run_task(project, task, implement, review, push, max_fix_rounds=2,
+                          image_path=None):
+            impl = implement(project, task, "", image_path)
+            self.assertTrue(impl["ok"])
+            verdict = review(project, impl["head_sha"])
+            self.assertEqual(verdict["verdict"], "GO")
+            pushed = push(project)
+            self.assertTrue(pushed["ok"])
+            return {"ok": True, "commit": pushed["pushed_sha"], "summary": "dry"}
+
+        def fake_open_pr(repo, actual_branch, evidence, sig, project, **kwargs):
+            open_pr_calls.append((repo, actual_branch, evidence, sig, project, kwargs))
+            self.assertTrue(kwargs.get("dry_run"))
+            return ""
+
+        args = types.SimpleNamespace(
+            project="/repo",
+            task=["dry", "run", "task"],
+            base="main",
+            test_cmd="python3 -m unittest tests.test_pr",
+            implementer="Codex",
+            reviewer="Claude",
+            max_fix_rounds=1,
+            dry_run=True,
+        )
+
+        with mock.patch.object(_ship, "find_project_root", return_value="/repo"), \
+                mock.patch.object(_ship, "_git", return_value=base_sha), \
+                mock.patch.object(_pr, "create_branch", return_value=branch), \
+                mock.patch.object(_chat_executor, "_roles_for", return_value=("Codex", "Claude")), \
+                mock.patch.object(_ship, "_git_head", side_effect=[base_sha, head_sha, head_sha]), \
+                mock.patch.object(_pr, "remote_head", return_value=None), \
+                mock.patch.object(_agent_cli, "implement_argv", return_value=["implement"]), \
+                mock.patch.object(_agent_cli, "review_argv", return_value=["review"]), \
+                mock.patch.object(_ship.subprocess, "run", side_effect=[
+                    Result(returncode=0),
+                    Result(returncode=0, stdout="VERDICT: GO ok\n"),
+                ]), \
+                mock.patch.object(_ship, "_run_test_cmd", return_value=(True, "Ran 1 test\nOK\n")), \
+                mock.patch.object(_ship, "_changed_files", return_value=["scripts/x.py"]), \
+                mock.patch.object(_ship, "_diffstat", return_value="scripts/x.py | 1 +"), \
+                mock.patch.object(_pr, "branch_patch_ids", return_value=["patch-1"]), \
+                mock.patch.object(ev, "sign", return_value="signed-evidence"), \
+                mock.patch.object(ev, "verify", return_value=True), \
+                mock.patch.object(_pr, "open_pr", side_effect=fake_open_pr), \
+                mock.patch.object(_chat_executor, "run_task", side_effect=fake_run_task):
+            out = StringIO()
+            with redirect_stdout(out):
+                rc = _ship.run(args)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(open_pr_calls), 1)
+        text = out.getvalue()
+        self.assertIn("status: DRY_RUN", text)
+        self.assertIn("DRY RUN", text)
+        self.assertIn("would open PR", text)
+        self.assertIn('"tests_ok": true', text)
+        self.assertIn("verdict: GO", text)
+        self.assertIn("tests_ok: True", text)
+        self.assertIn("pr_title: AI PR Gate: %s" % branch, text)
+        self.assertIn("pr_base: main", text)
+        self.assertIn("pr_head: %s" % branch, text)
+        self.assertIn("AI-authored change", text)
 
 
 class CliDispatchTests(unittest.TestCase):
