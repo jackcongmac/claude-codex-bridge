@@ -52,6 +52,19 @@ sig = SSHSIG-sign(reviewer_key, canonical(evidence))
   走一个 branch-mode 的同款校验,要么在 `_pr.py` 里实现同样的 exact-head 验证,**绝不能退化成裸 `git push`**。
 - ("EC3" 是旧叫法;实际是 `_sig.py` 的 **SSHSIG/Ed25519 签名证据**,以此为准。)
 
+### 独立性的诚实边界(对抗审揭示,采纳 Option A)【别吹】
+
+对抗安全审揭示:**在单机同用户上,签名无法密码学证明"另一个 agent 独立审了"**——签名是编排进程用 reviewer 私钥
+签的,证明的是"持有 reviewer.key + 绑定到确切 diff",不是"审查那个 LLM 亲自签的"。`implementer`/`reviewer`
+是自填标签(至少强制非空、去重、大小写归一),不与 commit 作者强绑。**所以卖点必须诚实:**
+
+- **签名真正提供的**:防篡改(改任何字段/审后动 diff → 校验失败,不出 PR)+ 可问责(谁的 key 批的)+
+  **绑定到确切 diff + 确切测试** + **跨模型审**(Codex 实现、Claude 审是真不同模型看过)+ **人类做最终 merge**。
+- **密码学"独立"只在跨机器/多用户模型满级**(reviewer.key 在 reviewer 自己机器上)。单机不吹这个。
+- **实际的独立来源**:两个不同模型的独立调用 + 精确 diff 绑定 + 人类 merge——这已经比"一个 agent 自说自话直推"强得多。
+- **执行器(open_pr)必须自己强制全部不变量**(验签 + verdict=GO + branch 匹配 + tests_ok + 本地/远端 head 匹配),
+  不信调用方。测试证明:无效签名/FIX-FIRST/测试没过/分支不符 → 一律不出 PR。
+
 ### PR body(差异化就在这)
 
 ```
