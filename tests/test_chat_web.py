@@ -326,15 +326,15 @@ class PageTemplateTests(unittest.TestCase):
 
         self.assertRegex(page, r"#group\{[^}]*flex:1 1 auto")
 
-    def test_signed_in_user_is_aligned_to_header_right(self):
+    def test_signed_in_user_stays_next_to_group_title_on_header_left(self):
         page = (cw._PAGE
                 .replace("__SELF__", "Jack")
                 .replace("__PROJECT__", "claude-codex-bridge")
                 .replace("__PROJECTPATH__", "/Volumes/WorkHD/Projects/claude-codex-bridge"))
 
         self.assertIn('id=viewer title="Signed in as Jack">Jack</span><span id=close', page)
-        self.assertIn("#viewer{margin-left:auto;", page)
-        self.assertIn("#close{cursor:pointer;font-size:20px;color:#bbb;margin-left:12px}", page)
+        self.assertIn("#viewer{color:#9a9a9a;font-size:12px;margin-left:8px;", page)
+        self.assertIn("#close{cursor:pointer;font-size:20px;color:#bbb;margin-left:auto}", page)
 
 
 class ServerRoundTripTests(unittest.TestCase):
