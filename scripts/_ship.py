@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bridge_common import find_project_root  # noqa: E402
@@ -17,6 +18,8 @@ import _agent_cli  # noqa: E402
 import _chat_executor  # noqa: E402
 import _pr  # noqa: E402
 import _pr_evidence  # noqa: E402
+import bridge_route  # noqa: E402
+import bridge_usage  # noqa: E402
 
 
 def _git(root, *args, check=True):
@@ -80,6 +83,100 @@ def _print_dry_run_report(state, branch):
     print("pr_head: %s" % plan["head"])
     print("pr_body:")
     print(plan["body"])
+
+
+def _other_actor(actor):
+    if actor == "Claude":
+        return "Codex"
+    if actor == "Codex":
+        return "Claude"
+    return None
+
+
+def resolve_roles(reco, cli_implementer, cli_reviewer, default_impl, default_rev):
+    """Resolve ship implementer/reviewer from CLI, route advice, and static defaults."""
+    reco = reco or {}
+    notes = []
+    if cli_implementer or cli_reviewer:
+        implementer = cli_implementer or _other_actor(cli_reviewer) or default_impl
+        reviewer = cli_reviewer or _other_actor(implementer) or default_rev
+        source = "cli"
+        reco_impl = reco.get("implementer")
+        if (
+            reco.get("confidence") == "high"
+            and reco_impl
+            and reco_impl != implementer
+        ):
+            notes.append(
+                "quota suggests %s implements (%s), you specified %s"
+                % (reco_impl, reco.get("reason", ""), implementer)
+            )
+    elif (
+        reco.get("confidence") == "high"
+        and reco.get("implementer")
+        and reco.get("reviewer")
+    ):
+        implementer = reco["implementer"]
+        reviewer = reco["reviewer"]
+        source = "route"
+    else:
+        implementer = default_impl
+        reviewer = default_rev
+        source = "default"
+        notes.append("route confidence %s -> using default roles" % reco.get("confidence"))
+        notes.extend(reco.get("warnings") or [])
+    if implementer == reviewer:
+        raise ValueError("implementer and reviewer must be different actors")
+    return {
+        "implementer": implementer,
+        "reviewer": reviewer,
+        "source": source,
+        "notes": notes,
+    }
+
+
+def _signal_pct(signals, model, key):
+    value = (signals.get(model) or {}).get(key)
+    if value is None:
+        return "—"
+    try:
+        return "%d%%" % int(round(float(value)))
+    except (TypeError, ValueError):
+        return "—"
+
+
+def route_banner_lines(reco, resolved):
+    """Return human-readable advisory route banner lines without side effects."""
+    reco = reco or {}
+    resolved = resolved or {}
+    signals = reco.get("signals") or {}
+    lines = [
+        "[route] quota: Claude 5h %s · 7d %s    Codex 5h %s · wk %s"
+        % (
+            _signal_pct(signals, "Claude", "five_h"),
+            _signal_pct(signals, "Claude", "weekly"),
+            _signal_pct(signals, "Codex", "five_h"),
+            _signal_pct(signals, "Codex", "weekly"),
+        ),
+        "[route] recommend: implement->%s review->%s  [%s]  (%s)"
+        % (
+            reco.get("implementer") or "—",
+            reco.get("reviewer") or "—",
+            reco.get("confidence") or "—",
+            reco.get("reason") or "—",
+        ),
+        "[route] using %s roles: implement->%s review->%s"
+        % (
+            resolved.get("source") or "—",
+            resolved.get("implementer") or "—",
+            resolved.get("reviewer") or "—",
+        ),
+    ]
+    for note in resolved.get("notes") or []:
+        lines.append("[route] note: %s" % note)
+    for warning in reco.get("warnings") or []:
+        lines.append("[route] WARN %s" % warning)
+    return lines
 
 
 def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
@@ -192,11 +289,27 @@ def run(args):
         raise RuntimeError("task is required")
     base_ref = args.base or _default_base(root)
     base_sha = _git(root, "rev-parse", "--verify", "%s^{commit}" % base_ref)
-    implementer, reviewer = _chat_executor._roles_for(root)
-    implementer = args.implementer or implementer
-    reviewer = args.reviewer or reviewer
-    if implementer == reviewer:
-        raise RuntimeError("implementer and reviewer must be different actors")
+    if not getattr(args, "no_route", False):
+        reco = bridge_route.recommend(
+            bridge_usage.read_claude(),
+            bridge_usage.read_codex(),
+            now_ts=time.time(),
+        )
+    else:
+        reco = {
+            "implementer": None,
+            "reviewer": None,
+            "confidence": "low",
+            "reason": "route disabled (--no-route)",
+            "warnings": [],
+            "signals": {},
+        }
+    default_impl, default_rev = _chat_executor._roles_for(root)
+    resolved = resolve_roles(
+        reco, args.implementer, args.reviewer, default_impl, default_rev)
+    implementer, reviewer = resolved["implementer"], resolved["reviewer"]
+    for line in route_banner_lines(reco, resolved):
+        print(line, file=sys.stderr)
 
     branch = _pr.create_branch(root, base_ref, _slug(task))
     state, implement, review, push = _make_callbacks(
@@ -237,6 +350,8 @@ def main(argv=None):
                     help="actor that implements the change")
     ap.add_argument("--reviewer", default=None,
                     help="actor that reviews and signs the evidence")
+    ap.add_argument("--no-route", action="store_true",
+                    help="skip quota route recommendation and use static default roles")
     ap.add_argument("--max-fix-rounds", type=int, default=2,
                     help="maximum implement/fix attempts after FIX-FIRST")
     ap.add_argument("--dry-run", action="store_true",
@@ -245,7 +360,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     try:
         return run(args)
-    except (RuntimeError, subprocess.SubprocessError, OSError) as exc:
+    except (RuntimeError, ValueError, subprocess.SubprocessError, OSError) as exc:
         print("status: FAILED")
         print("summary: %s" % exc)
         return 1
