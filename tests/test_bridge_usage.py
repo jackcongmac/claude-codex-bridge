@@ -4,11 +4,16 @@ import pathlib
 import sys
 import tempfile
 import unittest
+import io
+from contextlib import redirect_stdout
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import bridge_usage  # noqa: E402
+
+
+ANSI_ESC = "\033["
 
 
 class RecordingFS:
@@ -62,7 +67,19 @@ class BridgeUsageTests(unittest.TestCase):
             "model": {"id": "claude-opus", "display_name": "Claude Opus"},
         }
 
-    def codex_event(self, ts=1234, primary=14.2, secondary=2.4):
+    def codex_event(self, ts=1234, primary=14.2, secondary=2.4, info=None):
+        if info is None:
+            info = {
+                "model_context_window": 200000,
+                "last_token_usage": {
+                    "input_tokens": 46000,
+                    "total_tokens": 47000,
+                },
+                "total_token_usage": {
+                    "input_tokens": 300000,
+                    "total_tokens": 304000,
+                },
+            }
         return {
             "type": "event_msg",
             "timestamp": ts,
@@ -80,9 +97,50 @@ class BridgeUsageTests(unittest.TestCase):
                         "resets_at": 4000,
                     },
                 },
-                "info": {"model_context_window": 200000},
+                "info": info,
             },
         }
+
+    def sample_claude_usage(self, five=3, seven=8, ctx=21):
+        return {
+            "five_hour_pct": five,
+            "seven_day_pct": seven,
+            "five_hour_reset": 1000,
+            "seven_day_reset": 2000,
+            "ctx_pct": ctx,
+            "mtime": 990,
+        }
+
+    def sample_codex_usage(self, primary=14.2, secondary=2.4, ctx=23, event_ts=1000):
+        return {
+            "primary_pct": primary,
+            "secondary_pct": secondary,
+            "primary_reset": 3000,
+            "secondary_reset": 4000,
+            "ctx_pct": ctx,
+            "event_ts": event_ts,
+        }
+
+    def run_main(self, argv, env=None, claude=None, codex=None):
+        old_read_claude = bridge_usage.read_claude
+        old_read_codex = bridge_usage.read_codex
+        old_env = os.environ.copy()
+        os.environ.pop("BRIDGE_USAGE_COLOR", None)
+        os.environ.pop("NO_COLOR", None)
+        if env:
+            os.environ.update(env)
+        bridge_usage.read_claude = lambda: claude
+        bridge_usage.read_codex = lambda: codex
+        stdout = io.StringIO()
+        try:
+            with redirect_stdout(stdout):
+                rc = bridge_usage.main(argv)
+        finally:
+            bridge_usage.read_claude = old_read_claude
+            bridge_usage.read_codex = old_read_codex
+            os.environ.clear()
+            os.environ.update(old_env)
+        return rc, stdout.getvalue()
 
     def test_read_claude_parses_confirmed_schema_and_mtime(self):
         path = self.tmp / "bridge-usage.json"
@@ -128,7 +186,60 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertEqual(usage["secondary_pct"], 3.2)
         self.assertEqual(usage["primary_reset"], 3000)
         self.assertEqual(usage["secondary_reset"], 4000)
+        self.assertEqual(usage["ctx_pct"], 23)
         self.assertEqual(usage["event_ts"], 250)
+
+    def test_read_codex_computes_ctx_pct_from_last_input_tokens_and_window(self):
+        home = self.tmp / "codex"
+        rollout = home / "sessions" / "2026" / "07" / "04" / "rollout-ctx.jsonl"
+        self.write_rollout(
+            rollout,
+            [
+                self.codex_event(
+                    ts=500,
+                    info={
+                        "model_context_window": 200000,
+                        "last_token_usage": {
+                            "input_tokens": 45678,
+                            "total_tokens": 47000,
+                        },
+                        "total_token_usage": {
+                            "input_tokens": 345678,
+                            "total_tokens": 350000,
+                        },
+                    },
+                )
+            ],
+            mtime=500,
+        )
+
+        usage = bridge_usage.read_codex(home)
+
+        self.assertEqual(usage["ctx_pct"], 23)
+
+    def test_read_codex_cumulative_only_ctx_is_unknown_not_over_100(self):
+        home = self.tmp / "codex"
+        rollout = home / "sessions" / "2026" / "07" / "04" / "rollout-cumulative-only.jsonl"
+        self.write_rollout(
+            rollout,
+            [
+                self.codex_event(
+                    ts=500,
+                    info={
+                        "model_context_window": 200000,
+                        "total_token_usage": {
+                            "input_tokens": 345678,
+                            "total_tokens": 350000,
+                        },
+                    },
+                )
+            ],
+            mtime=500,
+        )
+
+        usage = bridge_usage.read_codex(home)
+
+        self.assertIsNone(usage["ctx_pct"])
 
     def test_read_codex_picks_newest_event_across_rollouts_with_mtime_boundary(self):
         home = self.tmp / "codex"
@@ -191,28 +302,24 @@ class BridgeUsageTests(unittest.TestCase):
 
     def test_format_line_shows_both_sides_when_present(self):
         line = bridge_usage.format_line(
-            {
-                "five_hour_pct": 3,
-                "seven_day_pct": 8,
-                "five_hour_reset": 1000,
-                "seven_day_reset": 2000,
-                "ctx_pct": 21,
-                "mtime": 990,
-            },
-            {
-                "primary_pct": 14.2,
-                "secondary_pct": 2.4,
-                "primary_reset": 3000,
-                "secondary_reset": 4000,
-                "event_ts": 1000,
-            },
+            self.sample_claude_usage(ctx=21),
+            self.sample_codex_usage(ctx=23),
             now_ts=1005,
         )
 
-        self.assertIn("CC 5h 3% · 7d 8%", line)
-        self.assertNotIn("ctx", line)
-        self.assertIn("Cx 5h 14% · wk 2%", line)
+        self.assertIn("CC 5h 3% · 7d 8% · ctx 21%", line)
+        self.assertIn("Cx 5h 14% · wk 2% · ctx 23%", line)
         self.assertNotIn("—", line)
+
+    def test_format_line_ctx_none_renders_dash_for_both_sides(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(ctx=None),
+            self.sample_codex_usage(ctx=None),
+            now_ts=1005,
+        )
+
+        self.assertIn("CC 5h 3% · 7d 8% · ctx —", line)
+        self.assertIn("Cx 5h 14% · wk 2% · ctx —", line)
 
     def test_format_line_marks_stale_codex_with_age_not_zero_percent(self):
         line = bridge_usage.format_line(
@@ -228,25 +335,18 @@ class BridgeUsageTests(unittest.TestCase):
         )
 
         self.assertIn("CC —", line)
-        self.assertIn("Cx 5h 55% · wk 6%", line)
+        self.assertIn("Cx 5h 55% · wk 6% · ctx —", line)
         self.assertIn("(12m ago)", line)
         self.assertNotIn("Cx 5h 0%", line)
 
     def test_format_line_missing_side_shows_dash(self):
         line = bridge_usage.format_line(
-            {
-                "five_hour_pct": 3,
-                "seven_day_pct": 8,
-                "five_hour_reset": 1000,
-                "seven_day_reset": 2000,
-                "ctx_pct": 21,
-                "mtime": 990,
-            },
+            self.sample_claude_usage(ctx=21),
             None,
             now_ts=1000,
         )
 
-        self.assertEqual(line, "CC 5h 3% · 7d 8%   ·   Cx —")
+        self.assertEqual(line, "CC 5h 3% · 7d 8% · ctx 21%   ·   Cx —")
 
     def test_field_name_normalization_for_both_sides(self):
         claude_path = self.tmp / "claude.json"
@@ -262,6 +362,73 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertEqual(claude["seven_day_pct"], 12)
         self.assertEqual(codex["primary_pct"], 33.8)
         self.assertEqual(codex["secondary_pct"], 4.1)
+
+    def test_format_line_colorizes_percentages_dash_and_stale_suffix(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=80, seven=60, ctx=59),
+            self.sample_codex_usage(primary=79, secondary=12, ctx=None, event_ts=1000),
+            now_ts=1720,
+            color=True,
+        )
+
+        self.assertIn("\033[1;31m80%\033[0m", line)
+        self.assertIn("\033[33m60%\033[0m", line)
+        self.assertIn("ctx 59%", line)
+        self.assertIn("\033[33m79%\033[0m", line)
+        self.assertIn("wk 12%", line)
+        self.assertIn("ctx \033[2m—\033[0m", line)
+        self.assertIn("\033[2m(12m ago)\033[0m", line)
+
+    def test_format_line_color_never_has_no_ansi(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=90, seven=70, ctx=None),
+            self.sample_codex_usage(primary=90, secondary=70, ctx=None, event_ts=1000),
+            now_ts=1720,
+            color=False,
+        )
+
+        self.assertNotIn(ANSI_ESC, line)
+        self.assertIn("ctx —", line)
+        self.assertIn("(12m ago)", line)
+
+    def test_main_color_always_forces_ansi_when_stdout_is_not_tty(self):
+        rc, output = self.run_main(
+            ["--color", "always", "--now-ts", "1720"],
+            claude=self.sample_claude_usage(five=80),
+            codex=self.sample_codex_usage(ctx=None, event_ts=1000),
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertIn("\033[1;31m80%\033[0m", output)
+        self.assertIn("\033[2m—\033[0m", output)
+
+    def test_main_color_never_and_no_color_env_emit_no_ansi(self):
+        for argv, env in (
+            (["--color", "never", "--now-ts", "1720"], {}),
+            (["--now-ts", "1720"], {"NO_COLOR": "1"}),
+        ):
+            with self.subTest(argv=argv, env=env):
+                rc, output = self.run_main(
+                    argv,
+                    env=env,
+                    claude=self.sample_claude_usage(five=80),
+                    codex=self.sample_codex_usage(ctx=None, event_ts=1000),
+                )
+
+                self.assertEqual(rc, 0)
+                self.assertNotIn(ANSI_ESC, output)
+
+    def test_main_json_is_never_colored_and_includes_codex_ctx_pct(self):
+        rc, output = self.run_main(
+            ["--json", "--color", "always", "--now-ts", "1720"],
+            claude=self.sample_claude_usage(five=80),
+            codex=self.sample_codex_usage(ctx=23, event_ts=1000),
+        )
+
+        self.assertEqual(rc, 0)
+        self.assertNotIn(ANSI_ESC, output)
+        payload = json.loads(output)
+        self.assertEqual(payload["codex"]["ctx_pct"], 23)
 
 
 if __name__ == "__main__":

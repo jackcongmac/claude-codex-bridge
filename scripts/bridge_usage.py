@@ -7,11 +7,18 @@ import glob
 import json
 import os
 import pathlib
+import sys
 import time
 
 
 DEFAULT_CLAUDE_USAGE = "~/.claude/bridge-usage.json"
 STALE_AFTER_SECONDS = 600
+DEFAULT_YELLOW_AT = 60
+DEFAULT_RED_AT = 80
+ANSI_RED_BOLD = "\033[1;31m"
+ANSI_YELLOW = "\033[33m"
+ANSI_DIM = "\033[2m"
+ANSI_RESET = "\033[0m"
 
 
 class LocalFS:
@@ -41,6 +48,14 @@ def _to_number(value):
 def _to_pct(value):
     number = _to_number(value)
     return int(number) if number.is_integer() else number
+
+
+def _round_pct(numerator, denominator):
+    numerator = _to_number(numerator)
+    denominator = _to_number(denominator)
+    if denominator <= 0 or numerator < 0 or numerator > denominator:
+        raise ValueError("invalid context token ratio")
+    return int(round((numerator / denominator) * 100))
 
 
 def _event_ts(event):
@@ -100,13 +115,25 @@ def _normalize_codex_event(event):
     rate_limits = payload["rate_limits"]
     primary = rate_limits["primary"]
     secondary = rate_limits["secondary"]
+    info = payload.get("info") or {}
     return {
         "primary_pct": _to_pct(primary["used_percent"]),
         "secondary_pct": _to_pct(secondary["used_percent"]),
         "primary_reset": primary["resets_at"],
         "secondary_reset": secondary["resets_at"],
+        "ctx_pct": _codex_ctx_pct(info),
         "event_ts": _event_ts(event),
     }
+
+
+def _codex_ctx_pct(info):
+    """Return current Codex context-window occupancy when rollout exposes it."""
+    try:
+        current = (info.get("last_token_usage") or {})["input_tokens"]
+        window = info["model_context_window"]
+        return _round_pct(current, window)
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _read_codex_rollout(path, fs):
@@ -155,41 +182,72 @@ def _pct(value):
     return "%d%%" % int(round(float(value)))
 
 
-def _format_claude(claude):
+def _ansi(text, code, color):
+    if not color:
+        return text
+    return "%s%s%s" % (code, text, ANSI_RESET)
+
+
+def _dash(color):
+    return _ansi("—", ANSI_DIM, color)
+
+
+def _pct_value(value, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
+    if value is None:
+        return _dash(color)
+    text = _pct(value)
+    number = float(value)
+    if color and number >= red_at:
+        return _ansi(text, ANSI_RED_BOLD, True)
+    if color and number >= yellow_at:
+        return _ansi(text, ANSI_YELLOW, True)
+    return text
+
+
+def _format_claude(claude, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if claude is None:
-        return "CC —"
-    # Quota only (5h/weekly). Context% is owned by ccstatusline's own widget, so
-    # we deliberately omit ctx here to avoid a duplicate/second Claude number.
-    # ctx_pct is still retained in read_claude()/--json for later use.
-    return "CC 5h %s · 7d %s" % (
-        _pct(claude["five_hour_pct"]),
-        _pct(claude["seven_day_pct"]),
+        return "CC %s" % _dash(color)
+    return "CC 5h %s · 7d %s · ctx %s" % (
+        _pct_value(claude["five_hour_pct"], color, yellow_at, red_at),
+        _pct_value(claude["seven_day_pct"], color, yellow_at, red_at),
+        _pct_value(claude.get("ctx_pct"), color, yellow_at, red_at),
     )
 
 
-def _codex_age_suffix(codex, now_ts):
+def _codex_age_suffix(codex, now_ts, color=False):
     age = float(now_ts) - float(codex["event_ts"])
     if age <= STALE_AFTER_SECONDS:
         return ""
     minutes = max(1, int(age // 60))
     if minutes < 24 * 60:
-        return " (%dm ago)" % minutes
-    return " (stale)"
+        return " " + _ansi("(%dm ago)" % minutes, ANSI_DIM, color)
+    return " " + _ansi("(stale)", ANSI_DIM, color)
 
 
-def _format_codex(codex, now_ts):
+def _format_codex(codex, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if codex is None:
-        return "Cx —"
-    return "Cx 5h %s · wk %s%s" % (
-        _pct(codex["primary_pct"]),
-        _pct(codex["secondary_pct"]),
-        _codex_age_suffix(codex, now_ts),
+        return "Cx %s" % _dash(color)
+    return "Cx 5h %s · wk %s · ctx %s%s" % (
+        _pct_value(codex["primary_pct"], color, yellow_at, red_at),
+        _pct_value(codex["secondary_pct"], color, yellow_at, red_at),
+        _pct_value(codex.get("ctx_pct"), color, yellow_at, red_at),
+        _codex_age_suffix(codex, now_ts, color),
     )
 
 
-def format_line(claude, codex, now_ts):
+def format_line(
+    claude,
+    codex,
+    now_ts,
+    color=False,
+    yellow_at=DEFAULT_YELLOW_AT,
+    red_at=DEFAULT_RED_AT,
+):
     """Format a compact combined gauge. now_ts is explicit for deterministic tests."""
-    return "%s   ·   %s" % (_format_claude(claude), _format_codex(codex, now_ts))
+    return "%s   ·   %s" % (
+        _format_claude(claude, color, yellow_at, red_at),
+        _format_codex(codex, now_ts, color, yellow_at, red_at),
+    )
 
 
 def _now_from_args(args, env):
@@ -199,21 +257,64 @@ def _now_from_args(args, env):
     return time.time()
 
 
+def _env_number(env, name, default):
+    try:
+        return float(env.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _color_mode(args, env):
+    if args.color:
+        return args.color
+    if env.get("NO_COLOR") is not None:
+        return "never"
+    mode = env.get("BRIDGE_USAGE_COLOR") or "auto"
+    mode = mode.lower()
+    if mode not in {"auto", "always", "never"}:
+        return "auto"
+    return mode
+
+
+def _should_color(args, env, stdout):
+    mode = _color_mode(args, env)
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return stdout.isatty()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Print Claude/Codex usage gauge.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--json", action="store_true", help="print normalized JSON")
     mode.add_argument("--line", action="store_true", help="print compact line (default)")
+    parser.add_argument(
+        "--color",
+        choices=("auto", "always", "never"),
+        help="colorize human output: auto, always, or never",
+    )
     parser.add_argument("--now-ts", type=float, help="override current unix time")
     args = parser.parse_args(argv)
 
+    env = os.environ
     now_ts = _now_from_args(args, os.environ)
     claude = read_claude()
     codex = read_codex()
     if args.json:
         print(json.dumps({"claude": claude, "codex": codex, "now_ts": now_ts}, sort_keys=True))
     else:
-        print(format_line(claude, codex, now_ts))
+        print(
+            format_line(
+                claude,
+                codex,
+                now_ts,
+                color=_should_color(args, env, sys.stdout),
+                yellow_at=_env_number(env, "BRIDGE_USAGE_YELLOW_AT", DEFAULT_YELLOW_AT),
+                red_at=_env_number(env, "BRIDGE_USAGE_RED_AT", DEFAULT_RED_AT),
+            )
+        )
     return 0
 
 
