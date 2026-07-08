@@ -10,11 +10,15 @@ import pathlib
 import sys
 import time
 
+from bridge_claude_reset import claude_reset
+
 
 DEFAULT_CLAUDE_USAGE = "~/.claude/bridge-usage.json"
 STALE_AFTER_SECONDS = 600
+SESSION_SECONDS = 5 * 3600
 DEFAULT_YELLOW_AT = 60
 DEFAULT_RED_AT = 80
+FIELD_SEPARATOR = "  ·  "
 ANSI_RED_BOLD = "\033[1;31m"
 ANSI_YELLOW = "\033[33m"
 ANSI_DIM = "\033[2m"
@@ -204,14 +208,41 @@ def _pct_value(value, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_R
     return text
 
 
-def _format_claude(claude, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
+def _fmt_reset(reset_ts, now_ts):
+    if reset_ts is None:
+        return ""
+    secs = int(float(reset_ts) - float(now_ts))
+    if secs <= 0 or secs > SESSION_SECONDS:
+        return ""
+    hours = secs // 3600
+    minutes = (secs % 3600) // 60
+    if hours > 0:
+        duration = "%dh%dm" % (hours, minutes)
+    else:
+        duration = "%dm" % minutes
+    return " (resets in %s)" % duration
+
+
+def _label(name):
+    return "%-6s  " % name
+
+
+def _format_claude(claude, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if claude is None:
-        return "CC %s" % _dash(color)
-    return "CC 5h %s · 7d %s · ctx %s" % (
+        return "%s%s" % (_label("Claude"), _dash(color))
+    return "%s5h %s%s%s7d %s%sctx %s" % (
+        _label("Claude"),
         _pct_value(claude["five_hour_pct"], color, yellow_at, red_at),
+        _fmt_reset(claude_reset(now_ts), now_ts),
+        FIELD_SEPARATOR,
         _pct_value(claude["seven_day_pct"], color, yellow_at, red_at),
+        FIELD_SEPARATOR,
         _pct_value(claude.get("ctx_pct"), color, yellow_at, red_at),
     )
+
+
+def _codex_is_fresh(codex, now_ts):
+    return float(now_ts) - float(codex["event_ts"]) <= STALE_AFTER_SECONDS
 
 
 def _codex_age_suffix(codex, now_ts, color=False):
@@ -220,16 +251,21 @@ def _codex_age_suffix(codex, now_ts, color=False):
         return ""
     minutes = max(1, int(age // 60))
     if minutes < 24 * 60:
-        return " " + _ansi("(%dm ago)" % minutes, ANSI_DIM, color)
-    return " " + _ansi("(stale)", ANSI_DIM, color)
+        return "  " + _ansi("(%dm ago)" % minutes, ANSI_DIM, color)
+    return "  " + _ansi("(stale)", ANSI_DIM, color)
 
 
 def _format_codex(codex, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if codex is None:
-        return "Cx %s" % _dash(color)
-    return "Cx 5h %s · wk %s · ctx %s%s" % (
+        return "%s%s" % (_label("Codex"), _dash(color))
+    reset_text = _fmt_reset(codex.get("primary_reset"), now_ts) if _codex_is_fresh(codex, now_ts) else ""
+    return "%s5h %s%s%swk %s%sctx %s%s" % (
+        _label("Codex"),
         _pct_value(codex["primary_pct"], color, yellow_at, red_at),
+        reset_text,
+        FIELD_SEPARATOR,
         _pct_value(codex["secondary_pct"], color, yellow_at, red_at),
+        FIELD_SEPARATOR,
         _pct_value(codex.get("ctx_pct"), color, yellow_at, red_at),
         _codex_age_suffix(codex, now_ts, color),
     )
@@ -243,9 +279,9 @@ def format_line(
     yellow_at=DEFAULT_YELLOW_AT,
     red_at=DEFAULT_RED_AT,
 ):
-    """Format a compact combined gauge. now_ts is explicit for deterministic tests."""
-    return "%s   ·   %s" % (
-        _format_claude(claude, color, yellow_at, red_at),
+    """Format readable Claude/Codex gauges. now_ts is explicit for deterministic tests."""
+    return "%s\n%s" % (
+        _format_claude(claude, now_ts, color, yellow_at, red_at),
         _format_codex(codex, now_ts, color, yellow_at, red_at),
     )
 

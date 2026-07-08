@@ -40,6 +40,9 @@ class BridgeUsageTests(unittest.TestCase):
         self.tmpdir = tempfile.TemporaryDirectory()
         self.tmp = pathlib.Path(self.tmpdir.name)
         self.addCleanup(self.tmpdir.cleanup)
+        self.old_claude_reset = bridge_usage.claude_reset
+        bridge_usage.claude_reset = lambda now_ts: None
+        self.addCleanup(lambda: setattr(bridge_usage, "claude_reset", self.old_claude_reset))
 
     def write_json(self, path, payload):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,11 +114,18 @@ class BridgeUsageTests(unittest.TestCase):
             "mtime": 990,
         }
 
-    def sample_codex_usage(self, primary=14.2, secondary=2.4, ctx=23, event_ts=1000):
+    def sample_codex_usage(
+        self,
+        primary=14.2,
+        secondary=2.4,
+        ctx=23,
+        event_ts=1000,
+        primary_reset=None,
+    ):
         return {
             "primary_pct": primary,
             "secondary_pct": secondary,
-            "primary_reset": 3000,
+            "primary_reset": primary_reset,
             "secondary_reset": 4000,
             "ctx_pct": ctx,
             "event_ts": event_ts,
@@ -307,8 +317,13 @@ class BridgeUsageTests(unittest.TestCase):
             now_ts=1005,
         )
 
-        self.assertIn("CC 5h 3% · 7d 8% · ctx 21%", line)
-        self.assertIn("Cx 5h 14% · wk 2% · ctx 23%", line)
+        lines = line.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], "Claude  5h 3%  ·  7d 8%  ·  ctx 21%")
+        self.assertEqual(lines[1], "Codex   5h 14%  ·  wk 2%  ·  ctx 23%")
+        self.assertTrue(lines[0].startswith("Claude"))
+        self.assertTrue(lines[1].startswith("Codex"))
+        self.assertEqual(lines[0].index("5h"), lines[1].index("5h"))
         self.assertNotIn("—", line)
 
     def test_format_line_ctx_none_renders_dash_for_both_sides(self):
@@ -318,8 +333,8 @@ class BridgeUsageTests(unittest.TestCase):
             now_ts=1005,
         )
 
-        self.assertIn("CC 5h 3% · 7d 8% · ctx —", line)
-        self.assertIn("Cx 5h 14% · wk 2% · ctx —", line)
+        self.assertIn("Claude  5h 3%  ·  7d 8%  ·  ctx —", line)
+        self.assertIn("Codex   5h 14%  ·  wk 2%  ·  ctx —", line)
 
     def test_format_line_marks_stale_codex_with_age_not_zero_percent(self):
         line = bridge_usage.format_line(
@@ -327,26 +342,106 @@ class BridgeUsageTests(unittest.TestCase):
             {
                 "primary_pct": 55.0,
                 "secondary_pct": 6.0,
-                "primary_reset": 3000,
+                "primary_reset": None,
                 "secondary_reset": 4000,
                 "event_ts": 1000,
             },
             now_ts=1720,
         )
 
-        self.assertIn("CC —", line)
-        self.assertIn("Cx 5h 55% · wk 6% · ctx —", line)
+        self.assertIn("Claude  —", line)
+        self.assertIn("Codex   5h 55%  ·  wk 6%  ·  ctx —", line)
         self.assertIn("(12m ago)", line)
-        self.assertNotIn("Cx 5h 0%", line)
+        self.assertNotIn("Codex   5h 0%", line)
 
-    def test_format_line_missing_side_shows_dash(self):
+    def test_format_line_adds_claude_and_codex_reset_suffixes(self):
+        old_claude_reset = bridge_usage.claude_reset
+        bridge_usage.claude_reset = lambda now_ts: now_ts + (48 * 60)
+        self.addCleanup(lambda: setattr(bridge_usage, "claude_reset", old_claude_reset))
+
         line = bridge_usage.format_line(
-            self.sample_claude_usage(ctx=21),
-            None,
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(
+                primary=34,
+                event_ts=1000,
+                primary_reset=1000 + (4 * 3600) + (49 * 60),
+            ),
             now_ts=1000,
         )
 
-        self.assertEqual(line, "CC 5h 3% · 7d 8% · ctx 21%   ·   Cx —")
+        lines = line.splitlines()
+        self.assertIn("Claude  5h 12% (resets in 48m)  ·  7d", lines[0])
+        self.assertIn("Codex   5h 34% (resets in 4h49m)  ·  wk", lines[1])
+
+    def test_format_line_omits_reset_suffix_when_reset_is_unknown(self):
+        old_claude_reset = bridge_usage.claude_reset
+        bridge_usage.claude_reset = lambda now_ts: None
+        self.addCleanup(lambda: setattr(bridge_usage, "claude_reset", old_claude_reset))
+
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(primary=34, event_ts=1000, ctx=23),
+            now_ts=1000,
+        )
+
+        self.assertIn("Claude  5h 12%  ·  7d", line)
+        self.assertIn("Codex   5h 34%  ·  wk", line)
+        self.assertNotIn("☡", line)
+
+    def test_format_line_omits_codex_reset_when_reading_is_stale(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(
+                primary=34,
+                event_ts=1000,
+                primary_reset=1000 + (4 * 3600) + (49 * 60),
+            ),
+            now_ts=1720,
+        )
+
+        codex_line = line.splitlines()[1]
+        self.assertNotIn("(resets in", codex_line)
+        self.assertIn("(12m ago)", codex_line)
+
+    def test_format_line_omits_reset_outside_valid_five_hour_window(self):
+        cases = (
+            ("future beyond window", 1000 + (25 * 3600)),
+            ("past reset", 999),
+        )
+        for label, reset_ts in cases:
+            with self.subTest(label=label):
+                bridge_usage.claude_reset = lambda now_ts, reset_ts=reset_ts: reset_ts
+                line = bridge_usage.format_line(
+                    self.sample_claude_usage(five=12),
+                    self.sample_codex_usage(primary=34, event_ts=1000, primary_reset=reset_ts),
+                    now_ts=1000,
+                )
+
+                self.assertNotIn("(resets in", line)
+                self.assertNotIn("☡", line)
+                self.assertNotIn("due", line)
+
+    def test_reset_suffix_has_no_ansi_when_percent_is_red(self):
+        old_claude_reset = bridge_usage.claude_reset
+        bridge_usage.claude_reset = lambda now_ts: now_ts + 60
+        self.addCleanup(lambda: setattr(bridge_usage, "claude_reset", old_claude_reset))
+
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=90),
+            self.sample_codex_usage(primary=90, event_ts=1000, primary_reset=3000),
+            now_ts=1000,
+            color=True,
+        )
+
+        self.assertIn("\033[1;31m90%\033[0m (resets in 1m)", line)
+        self.assertIn("\033[1;31m90%\033[0m (resets in 33m)", line)
+        self.assertNotIn("(resets in \033", line)
+        self.assertNotIn("\033[0m)", line)
+
+    def test_format_line_missing_side_shows_dash(self):
+        line = bridge_usage.format_line(None, None, now_ts=1000)
+
+        self.assertEqual(line, "Claude  —\nCodex   —")
 
     def test_field_name_normalization_for_both_sides(self):
         claude_path = self.tmp / "claude.json"
