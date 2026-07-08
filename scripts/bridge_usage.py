@@ -19,6 +19,7 @@ SESSION_SECONDS = 5 * 3600
 DEFAULT_YELLOW_AT = 60
 DEFAULT_RED_AT = 80
 FIELD_SEPARATOR = "  ·  "
+PREFIX_WIDTH = 22
 ANSI_RED_BOLD = "\033[1;31m"
 ANSI_YELLOW = "\033[33m"
 ANSI_DIM = "\033[2m"
@@ -78,6 +79,39 @@ def _event_ts(event):
     raise ValueError("missing event timestamp")
 
 
+def _text_or_none(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _model_with_effort(model, effort=None):
+    model_text = _text_or_none(model)
+    if model_text is None:
+        return None
+    effort_text = _text_or_none(effort)
+    if effort_text is None:
+        return model_text
+    return "%s %s" % (model_text, effort_text)
+
+
+def _strip_paren(text):
+    return text.split(" (", 1)[0].strip()
+
+
+def _claude_model(data):
+    model = data.get("model")
+    if not isinstance(model, dict):
+        return None
+    display_name = _text_or_none(model.get("display_name"))
+    if display_name is None:
+        return None
+    effort = data.get("effort") or {}
+    level = effort.get("level") if isinstance(effort, dict) else None
+    return _model_with_effort(_strip_paren(display_name), level)
+
+
 def read_claude(path=DEFAULT_CLAUDE_USAGE, fs=None):
     """Return normalized Claude usage, or None when the capture is absent/unreadable."""
     fs = _fs(fs)
@@ -96,6 +130,7 @@ def read_claude(path=DEFAULT_CLAUDE_USAGE, fs=None):
             "seven_day_reset": seven["resets_at"],
             "ctx_pct": _to_pct(context["used_percentage"]),
             "mtime": fs.stat(path).st_mtime,
+            "model": _claude_model(data),
         }
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         return None
@@ -130,6 +165,20 @@ def _normalize_codex_event(event):
     }
 
 
+def _codex_model_from_event(event):
+    if event.get("type") != "turn_context":
+        return None
+    payload = event.get("payload") or {}
+    if not isinstance(payload, dict):
+        return None
+    settings = ((payload.get("collaboration_mode") or {}).get("settings") or {})
+    if not isinstance(settings, dict):
+        settings = {}
+    model = payload.get("model") or settings.get("model")
+    effort = payload.get("effort") or settings.get("reasoning_effort")
+    return _model_with_effort(model, effort)
+
+
 def _codex_ctx_pct(info):
     """Return current Codex context-window occupancy when rollout exposes it."""
     try:
@@ -142,17 +191,22 @@ def _codex_ctx_pct(info):
 
 def _read_codex_rollout(path, fs):
     newest = None
+    model = None
     with fs.open_text(path) as handle:
         for line in handle:
             if not line.strip():
                 continue
             try:
                 event = json.loads(line)
+                event_model = _codex_model_from_event(event)
+                if event_model is not None:
+                    model = event_model
                 usage = _normalize_codex_event(event)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
             if usage is None:
                 continue
+            usage["model"] = model
             if newest is None or usage["event_ts"] > newest["event_ts"]:
                 newest = usage
     return newest
@@ -223,15 +277,30 @@ def _fmt_reset(reset_ts, now_ts):
     return " (resets in %s)" % duration
 
 
-def _label(name):
-    return "%-6s  " % name
+def _missing_line(name, color=False):
+    return "%s  %s" % (name, _dash(color))
+
+
+def _prefix(name, usage):
+    model = usage.get("model") if isinstance(usage, dict) else None
+    model = _text_or_none(model)
+    if model is None:
+        return name
+    return "%s: %s" % (name, model)
+
+
+def _label(name, usage):
+    prefix = _prefix(name, usage)
+    if len(prefix) > PREFIX_WIDTH:
+        return prefix + " "
+    return prefix.ljust(PREFIX_WIDTH) + "  "
 
 
 def _format_claude(claude, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if claude is None:
-        return "%s%s" % (_label("Claude"), _dash(color))
+        return _missing_line("Claude", color)
     return "%s5h %s%s%s7d %s%sctx %s" % (
-        _label("Claude"),
+        _label("Claude", claude),
         _pct_value(claude["five_hour_pct"], color, yellow_at, red_at),
         _fmt_reset(claude_reset(now_ts), now_ts),
         FIELD_SEPARATOR,
@@ -257,10 +326,10 @@ def _codex_age_suffix(codex, now_ts, color=False):
 
 def _format_codex(codex, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if codex is None:
-        return "%s%s" % (_label("Codex"), _dash(color))
+        return _missing_line("Codex", color)
     reset_text = _fmt_reset(codex.get("primary_reset"), now_ts) if _codex_is_fresh(codex, now_ts) else ""
     return "%s5h %s%s%swk %s%sctx %s%s" % (
-        _label("Codex"),
+        _label("Codex", codex),
         _pct_value(codex["primary_pct"], color, yellow_at, red_at),
         reset_text,
         FIELD_SEPARATOR,

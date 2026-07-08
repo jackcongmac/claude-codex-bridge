@@ -56,8 +56,10 @@ class BridgeUsageTests(unittest.TestCase):
         )
         os.utime(path, (mtime, mtime))
 
-    def claude_payload(self, five=3, seven=8, ctx=21):
-        return {
+    def claude_payload(self, five=3, seven=8, ctx=21, model=None, effort=None):
+        if model is None:
+            model = {"id": "claude-opus", "display_name": "Claude Opus"}
+        payload = {
             "rate_limits": {
                 "five_hour": {"used_percentage": five, "resets_at": 1000},
                 "seven_day": {"used_percentage": seven, "resets_at": 2000},
@@ -67,7 +69,27 @@ class BridgeUsageTests(unittest.TestCase):
                 "remaining_percentage": 100 - ctx,
                 "context_window_size": 200000,
             },
-            "model": {"id": "claude-opus", "display_name": "Claude Opus"},
+        }
+        if model is not False:
+            payload["model"] = model
+        if effort is not None:
+            payload["effort"] = effort
+        return payload
+
+    def codex_turn_context(self, ts=100, model="gpt-5.5", effort="high"):
+        return {
+            "type": "turn_context",
+            "timestamp": ts,
+            "payload": {
+                "model": model,
+                "effort": effort,
+                "collaboration_mode": {
+                    "settings": {
+                        "model": model,
+                        "reasoning_effort": effort,
+                    },
+                },
+            },
         }
 
     def codex_event(self, ts=1234, primary=14.2, secondary=2.4, info=None):
@@ -112,6 +134,7 @@ class BridgeUsageTests(unittest.TestCase):
             "seven_day_reset": 2000,
             "ctx_pct": ctx,
             "mtime": 990,
+            "model": None,
         }
 
     def sample_codex_usage(
@@ -129,6 +152,7 @@ class BridgeUsageTests(unittest.TestCase):
             "secondary_reset": 4000,
             "ctx_pct": ctx,
             "event_ts": event_ts,
+            "model": None,
         }
 
     def run_main(self, argv, env=None, claude=None, codex=None):
@@ -168,8 +192,42 @@ class BridgeUsageTests(unittest.TestCase):
                 "seven_day_reset": 2000,
                 "ctx_pct": 13,
                 "mtime": 1111,
+                "model": "Claude Opus",
             },
         )
+
+    def test_read_claude_model_strips_parenthetical_and_adds_effort(self):
+        path = self.tmp / "bridge-usage.json"
+        self.write_json(
+            path,
+            self.claude_payload(
+                model={"id": "claude-opus", "display_name": "Opus 4.8 (1M context)"},
+                effort={"level": "high"},
+            ),
+        )
+
+        usage = bridge_usage.read_claude(path)
+
+        self.assertEqual(usage["model"], "Opus 4.8 high")
+
+    def test_read_claude_model_without_effort_uses_display_name_only(self):
+        path = self.tmp / "bridge-usage.json"
+        self.write_json(
+            path,
+            self.claude_payload(model={"display_name": "Opus 4.8 (1M context)"}),
+        )
+
+        usage = bridge_usage.read_claude(path)
+
+        self.assertEqual(usage["model"], "Opus 4.8")
+
+    def test_read_claude_missing_model_is_none(self):
+        path = self.tmp / "bridge-usage.json"
+        self.write_json(path, self.claude_payload(model=False, effort={"level": "high"}))
+
+        usage = bridge_usage.read_claude(path)
+
+        self.assertIsNone(usage["model"])
 
     def test_read_claude_missing_file_returns_none(self):
         self.assertIsNone(bridge_usage.read_claude(self.tmp / "missing.json"))
@@ -198,6 +256,31 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertEqual(usage["secondary_reset"], 4000)
         self.assertEqual(usage["ctx_pct"], 23)
         self.assertEqual(usage["event_ts"], 250)
+
+    def test_read_codex_model_uses_turn_context_model_and_effort(self):
+        home = self.tmp / "codex"
+        rollout = home / "sessions" / "2026" / "07" / "04" / "rollout-model.jsonl"
+        self.write_rollout(
+            rollout,
+            [
+                self.codex_turn_context(ts=100, model="gpt-5.5", effort="high"),
+                self.codex_event(ts=200, primary=12.3),
+            ],
+            mtime=200,
+        )
+
+        usage = bridge_usage.read_codex(home)
+
+        self.assertEqual(usage["model"], "gpt-5.5 high")
+
+    def test_read_codex_missing_model_is_none(self):
+        home = self.tmp / "codex"
+        rollout = home / "sessions" / "2026" / "07" / "04" / "rollout-no-model.jsonl"
+        self.write_rollout(rollout, [self.codex_event(ts=200, primary=12.3)], mtime=200)
+
+        usage = bridge_usage.read_codex(home)
+
+        self.assertIsNone(usage["model"])
 
     def test_read_codex_computes_ctx_pct_from_last_input_tokens_and_window(self):
         home = self.tmp / "codex"
@@ -312,19 +395,33 @@ class BridgeUsageTests(unittest.TestCase):
 
     def test_format_line_shows_both_sides_when_present(self):
         line = bridge_usage.format_line(
+            {**self.sample_claude_usage(ctx=21), "model": "Opus 4.8 high"},
+            {**self.sample_codex_usage(ctx=23), "model": "gpt-5.5 high"},
+            now_ts=1005,
+        )
+
+        lines = line.splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[0], "Claude: Opus 4.8 high   5h 3%  ·  7d 8%  ·  ctx 21%")
+        self.assertEqual(lines[1], "Codex: gpt-5.5 high     5h 14%  ·  wk 2%  ·  ctx 23%")
+        self.assertTrue(lines[0].startswith("Claude: Opus 4.8 high"))
+        self.assertTrue(lines[1].startswith("Codex: gpt-5.5 high"))
+        self.assertEqual(lines[0].index("5h"), lines[1].index("5h"))
+        self.assertNotIn("—", line)
+
+    def test_format_line_model_none_falls_back_to_agent_prefix(self):
+        line = bridge_usage.format_line(
             self.sample_claude_usage(ctx=21),
             self.sample_codex_usage(ctx=23),
             now_ts=1005,
         )
 
         lines = line.splitlines()
-        self.assertEqual(len(lines), 2)
-        self.assertEqual(lines[0], "Claude  5h 3%  ·  7d 8%  ·  ctx 21%")
-        self.assertEqual(lines[1], "Codex   5h 14%  ·  wk 2%  ·  ctx 23%")
-        self.assertTrue(lines[0].startswith("Claude"))
-        self.assertTrue(lines[1].startswith("Codex"))
+        self.assertTrue(lines[0].startswith("Claude  "))
+        self.assertTrue(lines[1].startswith("Codex  "))
+        self.assertNotIn("Claude:", lines[0])
+        self.assertNotIn("Codex:", lines[1])
         self.assertEqual(lines[0].index("5h"), lines[1].index("5h"))
-        self.assertNotIn("—", line)
 
     def test_format_line_ctx_none_renders_dash_for_both_sides(self):
         line = bridge_usage.format_line(
@@ -333,8 +430,8 @@ class BridgeUsageTests(unittest.TestCase):
             now_ts=1005,
         )
 
-        self.assertIn("Claude  5h 3%  ·  7d 8%  ·  ctx —", line)
-        self.assertIn("Codex   5h 14%  ·  wk 2%  ·  ctx —", line)
+        self.assertRegex(line, r"Claude\s+5h 3%  ·  7d 8%  ·  ctx —")
+        self.assertRegex(line, r"Codex\s+5h 14%  ·  wk 2%  ·  ctx —")
 
     def test_format_line_marks_stale_codex_with_age_not_zero_percent(self):
         line = bridge_usage.format_line(
@@ -350,7 +447,7 @@ class BridgeUsageTests(unittest.TestCase):
         )
 
         self.assertIn("Claude  —", line)
-        self.assertIn("Codex   5h 55%  ·  wk 6%  ·  ctx —", line)
+        self.assertRegex(line, r"Codex\s+5h 55%  ·  wk 6%  ·  ctx —")
         self.assertIn("(12m ago)", line)
         self.assertNotIn("Codex   5h 0%", line)
 
@@ -370,8 +467,8 @@ class BridgeUsageTests(unittest.TestCase):
         )
 
         lines = line.splitlines()
-        self.assertIn("Claude  5h 12% (resets in 48m)  ·  7d", lines[0])
-        self.assertIn("Codex   5h 34% (resets in 4h49m)  ·  wk", lines[1])
+        self.assertRegex(lines[0], r"Claude\s+5h 12% \(resets in 48m\)  ·  7d")
+        self.assertRegex(lines[1], r"Codex\s+5h 34% \(resets in 4h49m\)  ·  wk")
 
     def test_format_line_omits_reset_suffix_when_reset_is_unknown(self):
         old_claude_reset = bridge_usage.claude_reset
@@ -384,8 +481,8 @@ class BridgeUsageTests(unittest.TestCase):
             now_ts=1000,
         )
 
-        self.assertIn("Claude  5h 12%  ·  7d", line)
-        self.assertIn("Codex   5h 34%  ·  wk", line)
+        self.assertRegex(line, r"Claude\s+5h 12%  ·  7d")
+        self.assertRegex(line, r"Codex\s+5h 34%  ·  wk")
         self.assertNotIn("☡", line)
 
     def test_format_line_omits_codex_reset_when_reading_is_stale(self):
@@ -441,7 +538,7 @@ class BridgeUsageTests(unittest.TestCase):
     def test_format_line_missing_side_shows_dash(self):
         line = bridge_usage.format_line(None, None, now_ts=1000)
 
-        self.assertEqual(line, "Claude  —\nCodex   —")
+        self.assertEqual(line, "Claude  —\nCodex  —")
 
     def test_field_name_normalization_for_both_sides(self):
         claude_path = self.tmp / "claude.json"
@@ -473,6 +570,20 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertIn("wk 12%", line)
         self.assertIn("ctx \033[2m—\033[0m", line)
         self.assertIn("\033[2m(12m ago)\033[0m", line)
+
+    def test_format_line_model_text_is_not_colored_when_percentage_is_red(self):
+        line = bridge_usage.format_line(
+            {**self.sample_claude_usage(five=90), "model": "Opus 4.8 high"},
+            {**self.sample_codex_usage(primary=90, event_ts=1000), "model": "gpt-5.5 high"},
+            now_ts=1000,
+            color=True,
+        )
+
+        self.assertIn("Claude: Opus 4.8 high", line)
+        self.assertIn("Codex: gpt-5.5 high", line)
+        self.assertNotIn("\033[1;31mClaude", line)
+        self.assertNotIn("\033[1;31mOpus 4.8 high", line)
+        self.assertNotIn("\033[1;31mgpt-5.5 high", line)
 
     def test_format_line_color_never_has_no_ansi(self):
         line = bridge_usage.format_line(
@@ -524,6 +635,8 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertNotIn(ANSI_ESC, output)
         payload = json.loads(output)
         self.assertEqual(payload["codex"]["ctx_pct"], 23)
+        self.assertIn("model", payload["claude"])
+        self.assertIn("model", payload["codex"])
 
 
 if __name__ == "__main__":
