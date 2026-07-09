@@ -1,7 +1,7 @@
 {
   "name": "@jackcongus/claude-codex-bridge",
-  "version": "0.9.0",
-  "description": "A bidirectional MCP bridge + per-project collaboration layer letting Claude Code and Codex find, reach, and stay in sync with each other.",
+  "version": "1.0.0",
+  "description": "Governance for AI coding: two different models (Claude + Codex) implement and review real repo changes and ship only via a signed, tamper-evident, human-approved PR — plus live cross-model token/quota awareness so you're never blocked by one vendor's limit.",
   "bin": {
     "claude-codex-bridge": "bin/claude-codex-bridge"
   },
