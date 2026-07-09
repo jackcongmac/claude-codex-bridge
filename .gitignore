@@ -42,3 +42,6 @@ collaboration_participants.json
 .claude-bridge/keys/
 *.key
 !*.pub
+
+# Claude Code local artifacts (worktrees etc) — not repo content
+.claude/
