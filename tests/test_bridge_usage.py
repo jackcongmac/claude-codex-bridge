@@ -14,6 +14,10 @@ import bridge_usage  # noqa: E402
 
 
 ANSI_ESC = "\033["
+ANSI_RED_BOLD = "\033[1;31m"
+ANSI_YELLOW = "\033[33m"
+ANSI_DIM = "\033[2m"
+ANSI_RESET = "\033[0m"
 
 
 class RecordingFS:
@@ -555,21 +559,86 @@ class BridgeUsageTests(unittest.TestCase):
         self.assertEqual(codex["primary_pct"], 33.8)
         self.assertEqual(codex["secondary_pct"], 4.1)
 
-    def test_format_line_colorizes_percentages_dash_and_stale_suffix(self):
+    def test_format_line_stale_codex_color_dims_whole_line_without_threshold_colors_or_reset(self):
         line = bridge_usage.format_line(
-            self.sample_claude_usage(five=80, seven=60, ctx=59),
-            self.sample_codex_usage(primary=79, secondary=12, ctx=None, event_ts=1000),
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(primary=85, secondary=12, ctx=23, event_ts=1000, primary_reset=2000),
             now_ts=1720,
             color=True,
         )
 
-        self.assertIn("\033[1;31m80%\033[0m", line)
-        self.assertIn("\033[33m60%\033[0m", line)
-        self.assertIn("ctx 59%", line)
-        self.assertIn("\033[33m79%\033[0m", line)
-        self.assertIn("wk 12%", line)
-        self.assertIn("ctx \033[2m—\033[0m", line)
-        self.assertIn("\033[2m(12m ago)\033[0m", line)
+        codex_line = line.splitlines()[1]
+        self.assertTrue(codex_line.startswith(ANSI_DIM), codex_line)
+        self.assertTrue(codex_line.endswith(ANSI_RESET), codex_line)
+        self.assertEqual(codex_line.count(ANSI_RESET), 1)
+        self.assertIn("5h 85%", codex_line)
+        self.assertIn("(12m ago)", codex_line)
+        self.assertNotIn(ANSI_RED_BOLD, codex_line)
+        self.assertNotIn(ANSI_YELLOW, codex_line)
+        self.assertNotIn("(resets in", codex_line)
+
+    def test_format_line_stale_codex_color_never_has_age_without_ansi_or_reset(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(primary=85, secondary=12, ctx=23, event_ts=1000, primary_reset=2000),
+            now_ts=1720,
+            color=False,
+        )
+
+        codex_line = line.splitlines()[1]
+        self.assertNotIn(ANSI_ESC, codex_line)
+        self.assertIn("(12m ago)", codex_line)
+        self.assertNotIn("(resets in", codex_line)
+
+    def test_format_line_fresh_codex_keeps_threshold_color_reset_and_no_age_or_dim(self):
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=12),
+            self.sample_codex_usage(primary=85, secondary=12, ctx=23, event_ts=950, primary_reset=1120),
+            now_ts=1000,
+            color=True,
+        )
+
+        codex_line = line.splitlines()[1]
+        self.assertFalse(codex_line.startswith(ANSI_DIM), codex_line)
+        self.assertIn("%s85%%%s" % (ANSI_RED_BOLD, ANSI_RESET), codex_line)
+        self.assertIn("(resets in 2m)", codex_line)
+        self.assertNotIn("ago)", codex_line)
+        self.assertNotIn("(stale)", codex_line)
+
+    def test_format_line_stale_claude_color_dims_whole_line_with_age_and_no_reset(self):
+        bridge_usage.claude_reset = lambda now_ts: now_ts + 60
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=85, seven=12, ctx=23),
+            self.sample_codex_usage(primary=12, event_ts=1720),
+            now_ts=1710,
+            color=True,
+        )
+
+        claude_line = line.splitlines()[0]
+        self.assertTrue(claude_line.startswith(ANSI_DIM), claude_line)
+        self.assertTrue(claude_line.endswith(ANSI_RESET), claude_line)
+        self.assertEqual(claude_line.count(ANSI_RESET), 1)
+        self.assertIn("5h 85%", claude_line)
+        self.assertIn("(12m ago)", claude_line)
+        self.assertNotIn(ANSI_RED_BOLD, claude_line)
+        self.assertNotIn(ANSI_YELLOW, claude_line)
+        self.assertNotIn("(resets in", claude_line)
+
+    def test_format_line_fresh_claude_keeps_threshold_color_reset_and_no_age_or_dim(self):
+        bridge_usage.claude_reset = lambda now_ts: now_ts + 60
+        line = bridge_usage.format_line(
+            self.sample_claude_usage(five=85, seven=12, ctx=23),
+            self.sample_codex_usage(primary=12, event_ts=1000),
+            now_ts=1000,
+            color=True,
+        )
+
+        claude_line = line.splitlines()[0]
+        self.assertFalse(claude_line.startswith(ANSI_DIM), claude_line)
+        self.assertIn("%s85%%%s" % (ANSI_RED_BOLD, ANSI_RESET), claude_line)
+        self.assertIn("(resets in 1m)", claude_line)
+        self.assertNotIn("ago)", claude_line)
+        self.assertNotIn("(stale)", claude_line)
 
     def test_format_line_model_text_is_not_colored_when_percentage_is_red(self):
         line = bridge_usage.format_line(
@@ -600,13 +669,16 @@ class BridgeUsageTests(unittest.TestCase):
     def test_main_color_always_forces_ansi_when_stdout_is_not_tty(self):
         rc, output = self.run_main(
             ["--color", "always", "--now-ts", "1720"],
-            claude=self.sample_claude_usage(five=80),
+            claude={**self.sample_claude_usage(five=80), "mtime": 1700},
             codex=self.sample_codex_usage(ctx=None, event_ts=1000),
         )
 
         self.assertEqual(rc, 0)
         self.assertIn("\033[1;31m80%\033[0m", output)
-        self.assertIn("\033[2m—\033[0m", output)
+        codex_line = output.splitlines()[1]
+        self.assertTrue(codex_line.startswith(ANSI_DIM), codex_line)
+        self.assertIn("ctx —", codex_line)
+        self.assertTrue(codex_line.endswith(ANSI_RESET), codex_line)
 
     def test_main_color_never_and_no_color_env_emit_no_ansi(self):
         for argv, env in (

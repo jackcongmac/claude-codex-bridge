@@ -296,48 +296,69 @@ def _label(name, usage):
     return prefix.ljust(PREFIX_WIDTH) + "  "
 
 
+def _reading_age(usage, now_ts, timestamp_key):
+    return float(now_ts) - float(usage[timestamp_key])
+
+
+def _is_fresh(usage, now_ts, timestamp_key):
+    return _reading_age(usage, now_ts, timestamp_key) <= STALE_AFTER_SECONDS
+
+
+def _age_suffix(age):
+    minutes = max(1, int(age // 60))
+    if minutes < 24 * 60:
+        return "  (%dm ago)" % minutes
+    return "  (stale)"
+
+
+def _stale_line(line, age, color=False):
+    return _ansi(line + _age_suffix(age), ANSI_DIM, color)
+
+
 def _format_claude(claude, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if claude is None:
         return _missing_line("Claude", color)
-    return "%s5h %s%s%s7d %s%sctx %s" % (
-        _label("Claude", claude),
-        _pct_value(claude["five_hour_pct"], color, yellow_at, red_at),
-        _fmt_reset(claude_reset(now_ts), now_ts),
-        FIELD_SEPARATOR,
-        _pct_value(claude["seven_day_pct"], color, yellow_at, red_at),
-        FIELD_SEPARATOR,
-        _pct_value(claude.get("ctx_pct"), color, yellow_at, red_at),
-    )
+    age = _reading_age(claude, now_ts, "mtime")
+
+    def build(effective_color, reset_text):
+        return "%s5h %s%s%s7d %s%sctx %s" % (
+            _label("Claude", claude),
+            _pct_value(claude["five_hour_pct"], effective_color, yellow_at, red_at),
+            reset_text,
+            FIELD_SEPARATOR,
+            _pct_value(claude["seven_day_pct"], effective_color, yellow_at, red_at),
+            FIELD_SEPARATOR,
+            _pct_value(claude.get("ctx_pct"), effective_color, yellow_at, red_at),
+        )
+
+    if age > STALE_AFTER_SECONDS:
+        return _stale_line(build(False, ""), age, color)
+    return build(color, _fmt_reset(claude_reset(now_ts), now_ts))
 
 
 def _codex_is_fresh(codex, now_ts):
-    return float(now_ts) - float(codex["event_ts"]) <= STALE_AFTER_SECONDS
-
-
-def _codex_age_suffix(codex, now_ts, color=False):
-    age = float(now_ts) - float(codex["event_ts"])
-    if age <= STALE_AFTER_SECONDS:
-        return ""
-    minutes = max(1, int(age // 60))
-    if minutes < 24 * 60:
-        return "  " + _ansi("(%dm ago)" % minutes, ANSI_DIM, color)
-    return "  " + _ansi("(stale)", ANSI_DIM, color)
+    return _is_fresh(codex, now_ts, "event_ts")
 
 
 def _format_codex(codex, now_ts, color=False, yellow_at=DEFAULT_YELLOW_AT, red_at=DEFAULT_RED_AT):
     if codex is None:
         return _missing_line("Codex", color)
-    reset_text = _fmt_reset(codex.get("primary_reset"), now_ts) if _codex_is_fresh(codex, now_ts) else ""
-    return "%s5h %s%s%swk %s%sctx %s%s" % (
-        _label("Codex", codex),
-        _pct_value(codex["primary_pct"], color, yellow_at, red_at),
-        reset_text,
-        FIELD_SEPARATOR,
-        _pct_value(codex["secondary_pct"], color, yellow_at, red_at),
-        FIELD_SEPARATOR,
-        _pct_value(codex.get("ctx_pct"), color, yellow_at, red_at),
-        _codex_age_suffix(codex, now_ts, color),
-    )
+    age = _reading_age(codex, now_ts, "event_ts")
+
+    def build(effective_color, reset_text):
+        return "%s5h %s%s%swk %s%sctx %s" % (
+            _label("Codex", codex),
+            _pct_value(codex["primary_pct"], effective_color, yellow_at, red_at),
+            reset_text,
+            FIELD_SEPARATOR,
+            _pct_value(codex["secondary_pct"], effective_color, yellow_at, red_at),
+            FIELD_SEPARATOR,
+            _pct_value(codex.get("ctx_pct"), effective_color, yellow_at, red_at),
+        )
+
+    if age > STALE_AFTER_SECONDS:
+        return _stale_line(build(False, ""), age, color)
+    return build(color, _fmt_reset(codex.get("primary_reset"), now_ts))
 
 
 def format_line(
