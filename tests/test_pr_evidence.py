@@ -68,11 +68,33 @@ class EvidenceEnvelopeTests(unittest.TestCase):
 
         self.assertEqual(e["task_hash"], ev.sha256_text("fix the gate"))
         self.assertEqual(e["test_log_hash"], ev.sha256_text("Ran 3 tests\nOK\n"))
+        self.assertEqual(e["review_note_hash"], ev.sha256_text(""))
         self.assertIs(e["tests_ok"], True)
         self.assertEqual(e["patch_ids"], ["p1", "p2"])
         self.assertNotIn("fix the gate", json.dumps(e))
         self.assertNotIn("Ran 3 tests", json.dumps(e))
         self.assertTrue(e["nonce"])
+
+    def test_build_hashes_reviewer_note(self):
+        note = "WHY:\nThe change is scoped.\n\nDISAGREEMENTS/CONCERNS:\nnone\n\nVERDICT: GO clean"
+
+        e = ev.build_evidence(
+            task="fix the gate",
+            base_sha="b" * 40,
+            head_sha="h" * 40,
+            patch_ids=["p1"],
+            test_cmd="python3 -m unittest",
+            test_log="Ran 3 tests\nOK\n",
+            tests_ok=True,
+            branch="ai/fix-gate-bbbbbbb",
+            implementer="Codex",
+            reviewer="Reviewer",
+            verdict="GO",
+            review_note=note,
+        )
+
+        self.assertEqual(e["review_note_hash"], ev.sha256_text(note))
+        self.assertNotIn("The change is scoped", json.dumps(e))
 
     def test_canonical_is_deterministic_for_key_order(self):
         e = self._evidence()
@@ -98,6 +120,7 @@ class EvidenceEnvelopeTests(unittest.TestCase):
             ("verdict", "FIX-FIRST"),
             ("patch_ids", ["p1", "p3"]),
             ("test_log_hash", ev.sha256_text("different log")),
+            ("review_note_hash", ev.sha256_text("different review")),
         ]
 
         for key, value in mutations:

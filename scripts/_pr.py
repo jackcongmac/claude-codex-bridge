@@ -28,12 +28,28 @@ def _slug(text):
     return slug or "task"
 
 
-def create_branch(repo, base, slug, run=subprocess.run):
+def worktree_state(repo, run=subprocess.run):
     status = _check(
         run, ["git", "-C", repo, "status", "--porcelain"],
         capture_output=True, text=True)
-    if status.stdout.strip():
-        raise RuntimeError("worktree must be clean before creating an AI PR branch")
+    tracked = []
+    untracked = []
+    for line in (status.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        if line.startswith("?? "):
+            untracked.append(line[3:].strip())
+        else:
+            tracked.append(line[3:].strip())
+    return {"tracked": tracked, "untracked": untracked}
+
+
+def create_branch(repo, base, slug, run=subprocess.run):
+    state = worktree_state(repo, run=run)
+    if state["tracked"]:
+        raise RuntimeError(
+            "worktree has uncommitted tracked changes; commit or stash them first: %s"
+            % ", ".join(state["tracked"]))
     base_sha = _check(
         run, ["git", "-C", repo, "rev-parse", "--verify", "%s^{commit}" % base],
         capture_output=True, text=True).stdout.strip()
@@ -100,12 +116,12 @@ def pr_title(branch):
     return "AI PR Gate: %s" % branch
 
 
-def pr_plan(branch, evidence, sig):
+def pr_plan(branch, evidence, sig, review_note=""):
     return {
         "title": pr_title(branch),
         "base": _pr_base(evidence),
         "head": branch,
-        "body": pr_body(evidence, sig),
+        "body": pr_body(evidence, sig, review_note=review_note),
     }
 
 
@@ -113,12 +129,13 @@ def _test_result_word(evidence):
     return "PASSED" if evidence.get("tests_ok") is True else "FAILED"
 
 
-def pr_body(evidence, sig):
+def pr_body(evidence, sig, review_note=""):
     result = _test_result_word(evidence)
     canonical = _pr_evidence.canonical(evidence)
     head = evidence.get("head_sha", "")
     base = evidence.get("base_sha", "")
     patch_ids = evidence.get("patch_ids") or []
+    review_note_hash = evidence.get("review_note_hash", "")
     return "\n".join([
         "AI-authored change - claude-codex-bridge review gate",
         "",
@@ -141,6 +158,12 @@ def pr_body(evidence, sig):
         "Base: %s (%s)" % (_pr_base(evidence), evidence.get("base_sha", "")),
         "Head: %s" % evidence.get("head_sha", ""),
         "",
+        "## Reviewer findings",
+        "The reviewer reasoning below is hashed into the signed evidence.",
+        "Review note hash: %s" % review_note_hash,
+        "",
+        review_note or "",
+        "",
         "Signed evidence envelope:",
         "```json",
         canonical,
@@ -154,8 +177,10 @@ def pr_body(evidence, sig):
     ])
 
 
-def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run,
+def open_pr(repo, branch, evidence, sig, project, *, review_note="", run=subprocess.run,
             gh=subprocess.run, dry_run=False):
+    if _pr_evidence.sha256_text(review_note) != evidence.get("review_note_hash"):
+        raise RuntimeError("reviewer reasoning does not match the signed evidence")
     if not _pr_evidence.verify(evidence, sig, project):
         raise RuntimeError("signed evidence did not verify")
     if (evidence.get("verdict") or "").upper() not in ("GO", "SHIP"):
@@ -194,7 +219,7 @@ def open_pr(repo, branch, evidence, sig, project, *, run=subprocess.run,
     fd, path = tempfile.mkstemp(prefix="claude-codex-pr-", suffix=".md")
     try:
         with os.fdopen(fd, "w") as f:
-            f.write(pr_body(evidence, sig))
+            f.write(pr_body(evidence, sig, review_note=review_note))
         title = pr_title(branch)
         r = gh(
             ["gh", "pr", "create", "--head", branch,

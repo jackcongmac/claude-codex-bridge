@@ -43,7 +43,10 @@ class AdapterRfcDocsTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text()
 
         self.assertIn("docs/adapter-rfc.md", readme)
-        self.assertIn("Claude Code ↔ Codex", readme[:2000])
+        # The v1.0 lead is "AI PR Gate for Claude Code + Codex"; the pitch must still
+        # name BOTH agents up front (and stay two-agent, per the parked adapter RFC).
+        self.assertIn("Claude Code", readme[:2000])
+        self.assertIn("Codex", readme[:2000])
 
 
 if __name__ == "__main__":

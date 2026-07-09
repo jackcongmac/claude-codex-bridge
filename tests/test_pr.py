@@ -6,7 +6,7 @@ import sys
 import tempfile
 import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest import mock
 
@@ -93,6 +93,17 @@ def _evidence(head="h" * 40):
 
 
 class BranchAndPatchTests(unittest.TestCase):
+    def test_worktree_state_classifies_tracked_and_untracked_lines(self):
+        run = FakeRun([
+            Result(stdout="?? scratch.txt\n M scripts/x.py\nA  tests/y.py\n\n"),
+        ])
+
+        state = _pr.worktree_state("/repo", run=run)
+
+        self.assertEqual(state["untracked"], ["scratch.txt"])
+        self.assertEqual(state["tracked"], ["scripts/x.py", "tests/y.py"])
+        self.assertEqual(run.commands()[0], ["git", "-C", "/repo", "status", "--porcelain"])
+
     def test_create_branch_requires_clean_worktree_and_checks_out_base(self):
         run = FakeRun([
             Result(stdout=""),
@@ -109,10 +120,27 @@ class BranchAndPatchTests(unittest.TestCase):
             ["git", "-C", "/repo", "checkout", "-b", branch, "main"],
         )
 
-    def test_create_branch_rejects_dirty_worktree(self):
+    def test_create_branch_allows_untracked_only_worktree(self):
+        run = FakeRun([
+            Result(stdout="?? notes.txt\n"),
+            Result(stdout="b" * 40 + "\n"),
+            Result(),
+        ])
+
+        branch = _pr.create_branch("/repo", "main", "fix gate", run=run)
+
+        self.assertEqual(branch, "ai/fix-gate-%s" % ("b" * 7))
+        self.assertEqual(
+            run.commands()[2],
+            ["git", "-C", "/repo", "checkout", "-b", branch, "main"],
+        )
+
+    def test_create_branch_rejects_tracked_worktree_and_names_path(self):
         run = FakeRun([Result(stdout=" M scripts/x.py\n")])
 
-        with self.assertRaisesRegex(RuntimeError, "worktree must be clean"):
+        with self.assertRaisesRegex(
+                RuntimeError,
+                "worktree has uncommitted tracked changes; commit or stash them first: scripts/x.py"):
             _pr.create_branch("/repo", "main", "fix gate", run=run)
 
         self.assertEqual(len(run.commands()), 1)
@@ -297,6 +325,35 @@ class OpenPrTests(unittest.TestCase):
         self.assertEqual(self._push_commands(run), [])
         self.assertEqual(gh.calls, [])
 
+    def test_review_note_mismatch_aborts_before_signature_or_git_checks(self):
+        note = "WHY:\nLooks correct.\n\nDISAGREEMENTS/CONCERNS:\nnone\n\nVERDICT: GO clean"
+        evidence = ev.build_evidence(
+            task="fix the PR gate",
+            base_sha="b" * 40,
+            head_sha="h" * 40,
+            patch_ids=["patch-1"],
+            test_cmd="python3 -m unittest tests.test_pr",
+            test_log="Ran 4 tests in 0.01s\n\nOK\n",
+            tests_ok=True,
+            branch="ai/fix-pr-gate-bbbbbbb",
+            implementer="Codex",
+            reviewer="Claude",
+            verdict="GO",
+            review_note=note,
+        )
+        evidence["base_ref"] = "origin/main"
+        sig = ev.sign(evidence, "Claude", str(self.proj))
+        run = FakeRun()
+        gh = FakeGh()
+
+        with self.assertRaisesRegex(RuntimeError, "reviewer reasoning does not match"):
+            _pr.open_pr(
+                "/repo", evidence["branch"], evidence, sig, str(self.proj),
+                review_note="different note", run=run, gh=gh)
+
+        self.assertEqual(run.commands(), [])
+        self.assertEqual(gh.calls, [])
+
     def test_happy_path_opens_pr_with_correct_evidence_body(self):
         evidence, sig = self._signed_evidence(head="h" * 40)
         run = self._successful_open_pr_run()
@@ -357,6 +414,18 @@ class OpenPrTests(unittest.TestCase):
 
         self.assertIn("Tests: FAILED (python3 -m unittest tests.test_pr)", body)
 
+    def test_pr_body_contains_reviewer_findings_and_signed_hash_note(self):
+        note = "WHY:\nThe implementation matches the spec.\n\nDISAGREEMENTS/CONCERNS:\nnone\n\nVERDICT: GO clean"
+        evidence, sig = self._signed_evidence(head="h" * 40)
+        evidence["review_note_hash"] = ev.sha256_text(note)
+
+        body = _pr.pr_body(evidence, sig, review_note=note)
+
+        self.assertIn("## Reviewer findings", body)
+        self.assertIn(note, body)
+        self.assertIn("Review note hash: %s" % ev.sha256_text(note), body)
+        self.assertIn("hashed into the signed evidence", body)
+
 
 class TestCommandTests(unittest.TestCase):
     def test_true_command_without_output_is_not_tests_ok(self):
@@ -367,6 +436,24 @@ class TestCommandTests(unittest.TestCase):
 
 
 class ShipDryRunTests(unittest.TestCase):
+    def test_review_reasoning_removes_verdict_only_lines(self):
+        self.assertEqual(_ship._review_reasoning("VERDICT: GO"), "")
+        self.assertEqual(_ship._review_reasoning("  GO  \nSHIP\nFIX-FIRST\nREVISE"), "")
+
+    def test_review_reasoning_preserves_why_text(self):
+        output = (
+            "VERDICT: GO\n"
+            "WHY: This change keeps the branch creation behavior intact while binding "
+            "reviewer findings into the signed evidence.\n"
+            "DISAGREEMENTS: none"
+        )
+
+        reasoning = _ship._review_reasoning(output)
+
+        self.assertIn("WHY: This change keeps the branch creation behavior intact", reasoning)
+        self.assertIn("DISAGREEMENTS: none", reasoning)
+        self.assertNotIn("VERDICT: GO", reasoning)
+
     def test_ship_dry_run_completes_flow_and_prints_would_open_pr(self):
         base_sha = "b" * 40
         head_sha = "h" * 40
@@ -401,6 +488,19 @@ class ShipDryRunTests(unittest.TestCase):
 
         with mock.patch.object(_ship, "find_project_root", return_value="/repo"), \
                 mock.patch.object(_ship, "_git", return_value=base_sha), \
+                mock.patch.object(
+                    _pr, "worktree_state",
+                    return_value={
+                        "tracked": [],
+                        "untracked": [
+                            "scratch-1.txt",
+                            "scratch-2.txt",
+                            "scratch-3.txt",
+                            "scratch-4.txt",
+                            "scratch-5.txt",
+                            "scratch-6.txt",
+                        ],
+                    }), \
                 mock.patch.object(_pr, "create_branch", return_value=branch), \
                 mock.patch.object(_chat_executor, "_roles_for", return_value=("Codex", "Claude")), \
                 mock.patch.object(_ship, "_git_head", side_effect=[base_sha, head_sha, head_sha]), \
@@ -409,7 +509,14 @@ class ShipDryRunTests(unittest.TestCase):
                 mock.patch.object(_agent_cli, "review_argv", return_value=["review"]), \
                 mock.patch.object(_ship.subprocess, "run", side_effect=[
                     Result(returncode=0),
-                    Result(returncode=0, stdout="VERDICT: GO ok\n"),
+                    Result(
+                        returncode=0,
+                        stdout=(
+                            "WHY:\nLooks correct.\n\n"
+                            "DISAGREEMENTS/CONCERNS:\nnone\n\n"
+                            "VERDICT: GO ok\n"
+                        ),
+                    ),
                 ]), \
                 mock.patch.object(_ship, "_run_test_cmd", return_value=(True, "Ran 1 test\nOK\n")), \
                 mock.patch.object(_ship, "_changed_files", return_value=["scripts/x.py"]), \
@@ -420,7 +527,8 @@ class ShipDryRunTests(unittest.TestCase):
                 mock.patch.object(_pr, "open_pr", side_effect=fake_open_pr), \
                 mock.patch.object(_chat_executor, "run_task", side_effect=fake_run_task):
             out = StringIO()
-            with redirect_stdout(out):
+            err = StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
                 rc = _ship.run(args)
 
         self.assertEqual(rc, 0)
@@ -436,6 +544,113 @@ class ShipDryRunTests(unittest.TestCase):
         self.assertIn("pr_base: main", text)
         self.assertIn("pr_head: %s" % branch, text)
         self.assertIn("AI-authored change", text)
+        self.assertIn("reviewer_findings:", text)
+        self.assertIn("WHY:\nLooks correct.", text)
+        err_text = err.getvalue()
+        self.assertIn("[ship] base: main @ bbbbbbb", err_text)
+        self.assertIn(
+            "[ship] note: 6 untracked file(s) present; they are NOT part of the reviewed diff "
+            "unless the implementer commits them: scratch-1.txt, scratch-2.txt, scratch-3.txt, "
+            "scratch-4.txt, scratch-5.txt, ... and 1 more",
+            err_text,
+        )
+
+    def test_ship_run_reports_base_and_local_head_mismatch_before_task_execution(self):
+        base_sha = "b" * 40
+        local_sha = "c" * 40
+        branch = "ai/task-bbbbbbb"
+        args = types.SimpleNamespace(
+            project="/repo",
+            task=["task"],
+            base="origin/main",
+            test_cmd="python3 -m unittest tests.test_pr",
+            implementer="Codex",
+            reviewer="Claude",
+            max_fix_rounds=1,
+            dry_run=False,
+            no_route=True,
+        )
+
+        with mock.patch.object(_ship, "find_project_root", return_value="/repo"), \
+                mock.patch.object(_ship, "_git", side_effect=[base_sha, local_sha]), \
+                mock.patch.object(_pr, "worktree_state", return_value={"tracked": [], "untracked": []}), \
+                mock.patch.object(_pr, "create_branch", return_value=branch), \
+                mock.patch.object(_chat_executor, "_roles_for", return_value=("Codex", "Claude")), \
+                mock.patch.object(_chat_executor, "run_task", return_value={"ok": False, "summary": "stop"}):
+            out = StringIO()
+            err = StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = _ship.run(args)
+
+        self.assertEqual(rc, 1)
+        err_text = err.getvalue()
+        self.assertIn("[ship] base: origin/main @ bbbbbbb", err_text)
+        self.assertIn(
+            "[ship] note: local HEAD ccccccc is not the base — the branch is cut from origin/main.",
+            err_text,
+        )
+
+    def test_ship_push_rejects_approving_verdict_without_substantive_reviewer_reasoning(self):
+        state, _implement, _review, push = _ship._make_callbacks(
+            "/repo", "task", "main", "b" * 40, "ai/task-bbbbbbb",
+            "python3 -m unittest tests.test_pr", "Codex", "Claude", dry_run=True)
+        state["tests_ok"] = True
+        state["verdict"] = "GO"
+        state["review_note"] = "VERDICT: GO"
+        state["test_log"] = "Ran 1 test\nOK\n"
+
+        with mock.patch.object(_ship, "_git_head", side_effect=AssertionError("guard should run before git")), \
+                mock.patch.object(ev, "sign") as sign:
+            result = push("/repo")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["summary"],
+            "reviewer returned an approving verdict with no substantive reasoning — refusing to sign",
+        )
+        sign.assert_not_called()
+
+    def test_ship_push_allows_approving_verdict_with_substantive_reviewer_reasoning(self):
+        state, _implement, _review, push = _ship._make_callbacks(
+            "/repo", "task", "main", "b" * 40, "ai/task-bbbbbbb",
+            "python3 -m unittest tests.test_pr", "Codex", "Claude", dry_run=True)
+        state["tests_ok"] = True
+        state["verdict"] = "GO"
+        state["review_note"] = (
+            "VERDICT: GO\n"
+            "WHY: The implementation matches the requested behavior and the tests cover "
+            "the signing guard against bare approvals.\n"
+            "DISAGREEMENTS/CONCERNS: none"
+        )
+        state["test_log"] = "Ran 1 test\nOK\n"
+
+        with mock.patch.object(_ship, "_git_head", return_value="h" * 40), \
+                mock.patch.object(_pr, "branch_patch_ids", return_value=["patch-1"]), \
+                mock.patch.object(ev, "sign", return_value="signed-evidence") as sign, \
+                mock.patch.object(ev, "verify", return_value=True), \
+                mock.patch.object(_pr, "open_pr", return_value=""):
+            result = push("/repo")
+
+        self.assertTrue(result["ok"])
+        sign.assert_called_once()
+
+    def test_ship_push_does_not_apply_reasoning_guard_to_fix_first(self):
+        state, _implement, _review, push = _ship._make_callbacks(
+            "/repo", "task", "main", "b" * 40, "ai/task-bbbbbbb",
+            "python3 -m unittest tests.test_pr", "Codex", "Claude", dry_run=True)
+        state["tests_ok"] = True
+        state["verdict"] = "FIX-FIRST"
+        state["review_note"] = "VERDICT: FIX-FIRST"
+        state["test_log"] = "Ran 1 test\nOK\n"
+
+        with mock.patch.object(_ship, "_git_head", return_value="h" * 40) as head, \
+                mock.patch.object(ev, "sign") as sign:
+            result = push("/repo")
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["summary"], "cannot open PR without approving reviewer verdict")
+        head.assert_called_once()
+        sign.assert_not_called()
 
 
 class CliDispatchTests(unittest.TestCase):

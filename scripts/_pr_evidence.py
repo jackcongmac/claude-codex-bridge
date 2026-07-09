@@ -19,7 +19,7 @@ def sha256_text(text):
 
 
 def build_evidence(task, base_sha, head_sha, patch_ids, test_cmd, test_log,
-                   tests_ok, branch, implementer, reviewer, verdict):
+                   tests_ok, branch, implementer, reviewer, verdict, review_note=""):
     return {
         "task_hash": sha256_text(task),
         "base_sha": base_sha,
@@ -27,6 +27,7 @@ def build_evidence(task, base_sha, head_sha, patch_ids, test_cmd, test_log,
         "patch_ids": sorted(set(patch_ids or [])),
         "test_cmd": test_cmd,
         "test_log_hash": sha256_text(test_log),
+        "review_note_hash": sha256_text(review_note),
         "tests_ok": bool(tests_ok),
         "branch": branch,
         "implementer": implementer,

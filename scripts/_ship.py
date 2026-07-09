@@ -22,6 +22,21 @@ import bridge_route  # noqa: E402
 import bridge_usage  # noqa: E402
 
 
+MIN_REVIEW_REASONING_CHARS = 40
+_VERDICT_ONLY_RE = re.compile(
+    r"^\s*(VERDICT\s*[:=]\s*)?(GO|SHIP|FIX-FIRST|REVISE)\s*$",
+    re.I)
+
+
+def _review_reasoning(review_output):
+    lines = []
+    for line in (review_output or "").splitlines():
+        if _VERDICT_ONLY_RE.match(line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def _git(root, *args, check=True):
     r = subprocess.run(
         ["git", "-C", root, *args],
@@ -71,13 +86,16 @@ def _diffstat(root, base, head):
 
 def _print_dry_run_report(state, branch):
     evidence = state["evidence"] or {}
-    plan = _pr.pr_plan(branch, evidence, state["sig"])
+    review_note = state.get("review_note", "")
+    plan = _pr.pr_plan(branch, evidence, state["sig"], review_note=review_note)
     print("status: DRY_RUN")
     print("DRY RUN — would open PR")
     print("evidence:")
     print(json.dumps(evidence, sort_keys=True, indent=2))
     print("verdict: %s" % evidence.get("verdict", ""))
     print("tests_ok: %s" % evidence.get("tests_ok", ""))
+    print("reviewer_findings:")
+    print(review_note or "")
     print("pr_title: %s" % plan["title"])
     print("pr_base: %s" % plan["base"])
     print("pr_head: %s" % plan["head"])
@@ -232,9 +250,13 @@ def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
             "Base SHA: %s\nHead SHA: %s\n"
             "Test command: %s\nTest result: %s\n"
             "Changed files:\n%s\n\nDiffstat:\n%s\n\n"
-            "End with EXACTLY one final line and nothing after it:\n"
-            "VERDICT: GO <one-line reason>\n"
-            "VERDICT: FIX-FIRST <one-line reason>"
+            "Return structured findings with all of these parts:\n"
+            "VERDICT: GO <one-line reason> or VERDICT: FIX-FIRST <one-line reason>\n"
+            "WHY:\n"
+            "<specific reasoning for the verdict>\n"
+            "DISAGREEMENTS/CONCERNS:\n"
+            "<specific disagreements or concerns, or 'none' if there are none>\n"
+            "Keep the VERDICT line parseable and include no approving verdict unless the WHY section has substance."
             % (reviewer, merge_base, head_sha, task, base_sha, head_sha, test_cmd,
                "PASSED" if state["tests_ok"] else "FAILED",
                "\n".join(files) or "(none)", stat or "(none)")
@@ -243,14 +265,24 @@ def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
             _agent_cli.review_argv(reviewer, prompt, root),
             cwd=root, capture_output=True, text=True, timeout=900).stdout or ""
         verdict, note = _chat_executor._parse_verdict(out)
+        review_note = (out or note or "").strip()
         if not state["tests_ok"]:
             verdict = "FIX-FIRST"
-            note = ("tests FAILED - " + note).strip()
+            review_note = ("tests FAILED - " + review_note).strip()
         state["verdict"] = verdict
-        state["review_note"] = note
-        return {"verdict": verdict, "note": note}
+        state["review_note"] = review_note
+        return {"verdict": verdict, "note": review_note}
 
     def push(project):
+        if (
+            state["verdict"] in ("GO", "SHIP")
+            and len(_review_reasoning(state["review_note"])) < MIN_REVIEW_REASONING_CHARS
+        ):
+            return {
+                "ok": False,
+                "pushed_sha": "",
+                "summary": "reviewer returned an approving verdict with no substantive reasoning — refusing to sign",
+            }
         head = _git_head(root)
         if not state["tests_ok"]:
             return {"ok": False, "pushed_sha": head,
@@ -261,7 +293,8 @@ def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
         patch_ids = _pr.branch_patch_ids(root, base_sha, head)
         evidence = _pr_evidence.build_evidence(
             task, base_sha, head, patch_ids, test_cmd, state["test_log"],
-            state["tests_ok"], branch, implementer, reviewer, state["verdict"])
+            state["tests_ok"], branch, implementer, reviewer, state["verdict"],
+            review_note=state["review_note"])
         evidence["base_ref"] = _pr.normalize_base_ref(base_ref)
         sig = _pr_evidence.sign(evidence, reviewer, root)
         if not sig:
@@ -271,7 +304,9 @@ def _make_callbacks(root, task, base_ref, base_sha, branch, test_cmd,
             return {"ok": False, "pushed_sha": head,
                     "summary": "signed evidence did not verify"}
         try:
-            pr_url = _pr.open_pr(root, branch, evidence, sig, root, dry_run=dry_run)
+            pr_url = _pr.open_pr(
+                root, branch, evidence, sig, root,
+                review_note=state["review_note"], dry_run=dry_run)
         except RuntimeError as exc:
             return {"ok": False, "pushed_sha": head, "summary": str(exc)}
         state["evidence"] = evidence
@@ -289,6 +324,13 @@ def run(args):
         raise RuntimeError("task is required")
     base_ref = args.base or _default_base(root)
     base_sha = _git(root, "rev-parse", "--verify", "%s^{commit}" % base_ref)
+    local_head = _git(root, "rev-parse", "HEAD", check=False)
+    print("[ship] base: %s @ %s" % (base_ref, base_sha[:7]), file=sys.stderr)
+    if local_head and local_head != base_sha:
+        print(
+            "[ship] note: local HEAD %s is not the base — the branch is cut from %s."
+            % (local_head[:7], base_ref),
+            file=sys.stderr)
     if not getattr(args, "no_route", False):
         reco = bridge_route.recommend(
             bridge_usage.read_claude(),
@@ -310,6 +352,18 @@ def run(args):
     implementer, reviewer = resolved["implementer"], resolved["reviewer"]
     for line in route_banner_lines(reco, resolved):
         print(line, file=sys.stderr)
+
+    state = _pr.worktree_state(root)
+    untracked = state["untracked"]
+    if untracked:
+        shown = untracked[:5]
+        if len(untracked) > 5:
+            shown.append("... and %d more" % (len(untracked) - 5))
+        print(
+            "[ship] note: %d untracked file(s) present; they are NOT part of the reviewed diff "
+            "unless the implementer commits them: %s"
+            % (len(untracked), ", ".join(shown)),
+            file=sys.stderr)
 
     branch = _pr.create_branch(root, base_ref, _slug(task))
     state, implement, review, push = _make_callbacks(
