@@ -1,8 +1,8 @@
 # claude-codex-bridge
 
-> Let **Claude Code** and **Codex** call each other as tools — and make the Claude
-> side a **persistent, project-aware colleague**, not a fresh stateless instance
-> every call.
+> **AI PR Gate for Claude Code + Codex** — one model implements, a *different*
+> model reviews the exact diff, and a signed, tamper-evident evidence trail opens
+> as a real GitHub PR for you to merge.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![MCP](https://img.shields.io/badge/protocol-MCP-7c4dff.svg)](https://modelcontextprotocol.io)
@@ -14,26 +14,39 @@
 Windows is not yet verified; see
 [`docs/windows-support.md`](docs/windows-support.md) for compatibility notes.
 
-**Claude Code ↔ Codex, wired together through MCP and a durable shared board.**
+**Governance for AI-written code, at the git boundary.**
 
-This project was built with the same Claude + Codex collaboration workflow it
-enables: one agent asks the other for review, execution, and second opinions,
-while both coordinate through project-local shared files.
+`claude-codex-bridge ship "<task>"` turns an AI coding task into a governed PR:
+create a branch, implement in a sandbox, run *your* test command, require a
+**different model** to review the exact diff, produce an **SSHSIG-signed evidence
+envelope** bound to that diff and test run, then open a real GitHub PR — you
+merge. `--dry-run` previews the whole flow with no side effects.
 
-It is a collaboration framework for asymmetric agents: MCP is the transport,
-`collaboration.md` is the shared memory, `collaboration_signal.json` is the cheap
-change detector, and resource profiles keep quota, context, billing, and write
-authority visible.
+**What the signature means — the honest boundary.** It gives you *tamper-evidence*,
+*accountability*, and *binding to exactly what was reviewed*, plus genuine
+*cross-model* review (Codex and Claude are different models) and a human merge. On
+a single machine it is **not** machine-independent cryptographic identity — true
+cryptographic independence is a cross-machine / team property. We'd rather say that
+plainly than oversell it.
+
+We build it with the workflow it ships: recent changes are implemented by one
+model, reviewed by the other, and pushed through the same signed review gate.
 
 ![Terminal demo: Codex asks Claude for review, applies the change, then asks Claude to re-review with memory of the previous turn.](docs/assets/claude-codex-bridge-demo.gif)
 
-A small, dependency-free bridge over the [Model Context
-Protocol](https://modelcontextprotocol.io). Each agent reaches the other with one
-tool call; the Claude side keeps per-project memory and reads your shared
-`collaboration.md` so the two agents actually work *together*.
+Built for solo and founding engineers who already run **both** Claude Code and
+Codex and let AI touch real repos. Under the hood it's a small, dependency-free
+bridge over the [Model Context Protocol](https://modelcontextprotocol.io): each
+agent reaches the other with one tool call and the Claude side keeps per-project
+memory — now pointed at PR governance plus live cross-model token/quota awareness
+so you're never blocked by one vendor's limit.
 
 ## What you can do with it
 
+- **Ship a task as a governed PR** (`ship`): sandboxed implement → cross-model
+  review of the exact diff → SSHSIG-signed evidence → a real GitHub PR you merge.
+- **See both models' live token/quota** (5-hour + weekly + context) in your status
+  line, plus an advisory pick of which model should implement vs review.
 - Ask Claude to review Codex's current implementation without leaving Codex.
 - Ask Codex to run or inspect a task from Claude Code.
 - Keep a persistent Claude colleague per project directory.
