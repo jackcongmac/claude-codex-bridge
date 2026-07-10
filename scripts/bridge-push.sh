@@ -17,10 +17,11 @@
 # script stops and leaves the rebase for you to resolve.
 set -euo pipefail
 
-WHO=""; NO_REVIEW=0
+WHO=""; NO_REVIEW=0; NO_TEST=0
 for a in "$@"; do
   case "$a" in
     --no-review) NO_REVIEW=1;;
+    --no-test) NO_TEST=1;;
     --*) echo "unknown arg: $a" >&2; exit 2;;
     *) [ -z "$WHO" ] && WHO="$a";;
   esac
@@ -40,6 +41,40 @@ jget() { _L="$LOCK" _K="$1" python3 -c "import json,os;print(json.load(open(os.e
 # so a late release can't delete a DIFFERENT pusher's freshly-acquired lock.
 release() {
   if [ "$(jget pid -1)" = "$$" ]; then rm -f "$LOCK"; fi
+}
+
+resolve_test_cmd() {
+  if [ -n "${BRIDGE_TEST_CMD:-}" ]; then
+    printf '%s\n' "$BRIDGE_TEST_CMD"
+    return 0
+  fi
+  if [ -f "$REPO/.bridge-test-cmd" ]; then
+    local line
+    while IFS= read -r line || [ -n "$line" ]; do
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      [[ "$line" =~ ^[[:space:]]*# ]] && continue
+      printf '%s\n' "$line"
+      return 0
+    done < "$REPO/.bridge-test-cmd"
+  fi
+  return 1
+}
+
+run_test_gate() {
+  local head_sha="$1"
+  local test_cmd
+  if [ "$NO_TEST" = "1" ]; then
+    echo "[!] --no-test: skipping the test gate for $head_sha (audited)" >&2
+    return 0
+  fi
+  if ! test_cmd="$(resolve_test_cmd)"; then
+    echo "[!] no test command configured (.bridge-test-cmd or BRIDGE_TEST_CMD) — pushing without a test gate" >&2
+    return 0
+  fi
+  if ! (cd "$REPO" && bash -c "$test_cmd"); then
+    echo "[x] test gate: '$test_cmd' FAILED — refusing to push" >&2
+    return 6
+  fi
 }
 
 acquire() {
@@ -165,5 +200,7 @@ if [ -n "$HEAD_SHA" ]; then
     fi
   fi
 fi
+TEST_HEAD_SHA="$(git rev-parse HEAD)"
+run_test_gate "$TEST_HEAD_SHA" || exit $?
 git push origin "$BRANCH"
 echo "[ok] pushed '$BRANCH'. Lock released."
