@@ -654,6 +654,82 @@ class ShipDryRunTests(unittest.TestCase):
 
 
 class CliDispatchTests(unittest.TestCase):
+    def _launcher_root(self, td):
+        root = pathlib.Path(td)
+        bin_dir = root / "bin"
+        scripts_dir = root / "scripts"
+        bin_dir.mkdir()
+        scripts_dir.mkdir()
+        launcher = bin_dir / "claude-codex-bridge"
+        shutil.copy(BIN, launcher)
+        launcher.chmod(0o755)
+        return launcher, scripts_dir
+
+    def test_usage_dispatches_to_bridge_usage_py_with_args(self):
+        with tempfile.TemporaryDirectory() as td:
+            launcher, scripts_dir = self._launcher_root(td)
+            (scripts_dir / "bridge_usage.py").write_text(
+                "import sys\n"
+                "print('bridge_usage.py')\n"
+                "print('\\n'.join(sys.argv[1:]))\n"
+            )
+
+            r = subprocess.run(
+                [str(launcher), "usage", "--window", "today", "--json"],
+                capture_output=True, text=True, timeout=20)
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            r.stdout.splitlines(),
+            ["bridge_usage.py", "--window", "today", "--json"],
+        )
+
+    def test_route_dispatches_to_bridge_route_py_with_args(self):
+        with tempfile.TemporaryDirectory() as td:
+            launcher, scripts_dir = self._launcher_root(td)
+            (scripts_dir / "bridge_route.py").write_text(
+                "import sys\n"
+                "print('bridge_route.py')\n"
+                "print('\\n'.join(sys.argv[1:]))\n"
+            )
+
+            r = subprocess.run(
+                [str(launcher), "route", "--current", "Codex", "--json"],
+                capture_output=True, text=True, timeout=20)
+
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(
+            r.stdout.splitlines(),
+            ["bridge_route.py", "--current", "Codex", "--json"],
+        )
+
+    def test_usage_dispatch_preserves_python_exit_code(self):
+        with tempfile.TemporaryDirectory() as td:
+            launcher, scripts_dir = self._launcher_root(td)
+            (scripts_dir / "bridge_usage.py").write_text(
+                "import sys\n"
+                "sys.exit(3)\n"
+            )
+
+            r = subprocess.run(
+                [str(launcher), "usage"],
+                capture_output=True, text=True, timeout=20)
+
+        self.assertEqual(r.returncode, 3)
+
+    def test_usage_missing_target_reports_friendly_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            launcher, _scripts_dir = self._launcher_root(td)
+
+            r = subprocess.run(
+                [str(launcher), "usage"],
+                capture_output=True, text=True, timeout=20)
+
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("missing", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertNotIn("can't open file", r.stderr)
+
     def test_ship_and_pr_aliases_show_ship_help_without_running_flow(self):
         for cmd in ("ship", "pr"):
             with self.subTest(cmd=cmd):

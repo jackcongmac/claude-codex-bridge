@@ -24,6 +24,16 @@ case "$cmd" in
     exec "$ROOT/install.sh" "$@" ;;
   update)
     exec "$ROOT/scripts/bridge-update.sh" "$@" ;;
+  usage)
+    py="$ROOT/scripts/bridge_usage.py"
+    if [ -f "$py" ]; then exec python3 "$py" "$@"; fi
+    echo "claude-codex-bridge: missing $py (broken install?)" >&2
+    exit 2 ;;
+  route)
+    py="$ROOT/scripts/bridge_route.py"
+    if [ -f "$py" ]; then exec python3 "$py" "$@"; fi
+    echo "claude-codex-bridge: missing $py (broken install?)" >&2
+    exit 2 ;;
   ship|pr)
     exec "$ROOT/scripts/bridge-ship.sh" "$@" ;;
   version|--version|-v)
@@ -37,6 +47,8 @@ Usage: claude-codex-bridge <command> [args]
   install            wire up the bridge (MCP both directions + the skill); runs
                      install.sh. Restart Codex afterward to load the MCP server.
   update             pull the latest into this install (scripts/bridge-update.sh)
+  usage              print the Claude/Codex token/quota gauge (scripts/bridge_usage.py)
+  route              recommend which model implements vs reviews (scripts/bridge_route.py)
   ship, pr           AI PR Gate: branch, test, review, sign evidence, open a PR
   version            print the version
   <name> [args]      run a bridge script: scripts/bridge-<name>.sh (or .py), e.g.
